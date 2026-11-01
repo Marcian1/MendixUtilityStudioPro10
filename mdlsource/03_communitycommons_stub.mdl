@@ -1,0 +1,16 @@
+mdl 1;
+
+-- Minimal stand-in for the Marketplace CommunityCommons module (only the Delay action FlowScope's sample flow uses).
+-- Replace with the Mendix 10 release of CommunityCommons from the Marketplace when convenient.
+CREATE OR MODIFY MODULE CommunityCommons;
+
+/**
+ * Causes this request to sleep for a while. Useful to prevent brute force attacks or to simulate latency delays.
+ *
+ * Delaytime : time in ms
+ */
+CREATE OR MODIFY JAVA ACTION CommunityCommons.Delay(delaytime: Integer NOT NULL) RETURNS Boolean
+AS $$
+Thread.sleep(delaytime);
+return true;
+$$;

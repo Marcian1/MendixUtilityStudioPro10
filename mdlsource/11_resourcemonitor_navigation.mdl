@@ -1,0 +1,12 @@
+mdl 1;
+
+-- Wires ResourceMonitor into this app: a menu item and the Admin module role on the Administrator user role.
+CREATE OR MODIFY NAVIGATION Responsive
+  HOME PAGE MyFirstModule.Home_Web
+{
+  MENU ITEM 'Home' ( OnClick: SHOW PAGE MyFirstModule.Home_Web )
+  MENU ITEM 'Microflow profiler' ( OnClick: SHOW PAGE FlowScope.Executions )
+  MENU ITEM 'Resource monitor' ( OnClick: SHOW PAGE ResourceMonitor.Dashboard )
+};
+
+ALTER USER ROLE Administrator ADD MODULE ROLES (ResourceMonitor.Admin);

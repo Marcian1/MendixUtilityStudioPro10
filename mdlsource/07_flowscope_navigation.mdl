@@ -1,0 +1,9 @@
+mdl 1;
+
+-- Adds FlowScope to the Responsive menu (this project's home page is MyFirstModule.Home_Web).
+CREATE OR MODIFY NAVIGATION Responsive
+  HOME PAGE MyFirstModule.Home_Web
+{
+  MENU ITEM 'Home' ( OnClick: SHOW PAGE MyFirstModule.Home_Web )
+  MENU ITEM 'Microflow profiler' ( OnClick: SHOW PAGE FlowScope.Executions )
+};

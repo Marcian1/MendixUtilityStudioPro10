@@ -1,0 +1,2112 @@
+mdl 1;
+create or modify module ResourceMonitor;
+create or modify module role ResourceMonitor.Admin description 'May open the Resource Monitor dashboard and read runtime, JVM, thread, memory and database information';
+
+create or modify enumeration ResourceMonitor.ChartRange (
+  Last1h 'Last 1 hour',
+  Last6h 'Last 6 hours',
+  Last24h 'Last 24 hours',
+  Last3d 'Last 3 days',
+  Last7d 'Last 7 days',
+  Last14d 'Last 14 days',
+  Custom 'Custom period'
+);
+
+/**
+ * How many days of per-minute history are kept. Older samples are deleted by the collector.
+ */
+create or modify constant ResourceMonitor.RetentionDays (
+  Type: Integer,
+  DefaultValue: 14
+);
+
+/**
+ * Switches the per-minute collector on or off without removing the scheduled event.
+ */
+create or modify constant ResourceMonitor.CollectionEnabled (
+  Type: Boolean,
+  DefaultValue: true
+);
+
+/**
+ * A point-in-time capture of runtime, JVM, OS, thread and database information.
+ */
+@Position(100, 100)
+create or modify non-persistent entity ResourceMonitor.Snapshot (
+  CapturedAt: DateTime,
+  CaptureDurationMs: Long,
+  /** Application and runtime */
+  MendixRuntimeVersion: String(100),
+  ActiveSessions: Long,
+  /** JVM */
+  JvmName: String(300),
+  JavaVersion: String(100),
+  JvmStartedAt: DateTime,
+  /** Operating system and CPU */
+  OsName: String(200),
+  OsArch: String(100),
+  AvailableProcessors: Long,
+  ProcessCpuLoadPercent: Decimal,
+  SystemCpuLoadPercent: Decimal,
+  /** Memory (megabytes) */
+  HeapUsedMb: Long,
+  HeapCommittedMb: Long,
+  HeapMaxMb: Long,
+  NonHeapUsedMb: Long,
+  PhysicalMemoryTotalMb: Long,
+  PhysicalMemoryFreeMb: Long,
+  DiskTotalMb: Long,
+  DiskFreeMb: Long,
+  /** Threads, classes and garbage collection */
+  ThreadCount: Long,
+  DeadlockedThreadCount: Long,
+  DeadlockedThreads: String(unlimited),
+  GcCollectionCount: Long,
+  GcCollectionTimeMs: Long,
+  /** Database */
+  DbProductName: String(200),
+  DbProductVersion: String(300),
+  DbDriverName: String(200),
+  DbDriverVersion: String(200),
+  DbTransactionIsolation: String(100),
+  DbPingMs: Decimal,
+  DbError: String(1000),
+  /** Database connection pool (Apache DBCP, via JMX) */
+  DbPoolActive: Long,
+  DbPoolIdle: Long,
+  DbPoolMaxTotal: Long,
+  DbPoolWaiters: Long,
+  /** Mendix data storage activity since the runtime started */
+  DbSelects: Long,
+  DbUpdates: Long,
+  /** Web server (Jetty, via JMX) */
+  WebThreadsTotal: Long,
+  WebThreadsIdle: Long,
+  WebThreadsMax: Long,
+  WebQueueSize: Long,
+  Range: Enumeration(ResourceMonitor.ChartRange) default ResourceMonitor.ChartRange.Last24h,
+  BucketMinutes: Long,
+  HistoryFrom: DateTime,
+  HistoryTo: DateTime,
+  HistorySamples: Long,
+  HistoryNote: String(500),
+  CustomFrom: DateTime,
+  CustomTo: DateTime
+);
+
+/**
+ * One JVM thread at the moment of capture.
+ */
+@Position(360, 100)
+create or modify non-persistent entity ResourceMonitor.ThreadSample (
+  ThreadId: Long,
+  Name: String(500),
+  State: String(50),
+  IsDaemon: Boolean default false,
+  Priority: Long,
+  CpuTimeMs: Long,
+  BlockedCount: Long,
+  WaitedCount: Long,
+  BlockedOnLock: String(500),
+  LockOwnerName: String(500),
+  TopFrame: String(1000),
+  StackTrace: String(unlimited)
+);
+
+/**
+ * A JVM memory pool (heap generation, metaspace, code cache ...).
+ */
+@Position(620, 100)
+create or modify non-persistent entity ResourceMonitor.MemoryPoolSample (
+  Name: String(200),
+  PoolType: String(50),
+  UsedMb: Decimal,
+  CommittedMb: Decimal,
+  MaxMb: Decimal,
+  PeakUsedMb: Decimal,
+  UsedPercentOfMax: Decimal
+);
+
+/**
+ * A JVM garbage collector.
+ */
+@Position(880, 100)
+create or modify non-persistent entity ResourceMonitor.GcSample (
+  Name: String(200),
+  CollectionCount: Long,
+  CollectionTimeMs: Long,
+  MemoryPools: String(1000)
+);
+
+/**
+ * One per-minute sample of the application's resource state.
+ */
+@Position(620, 380)
+create or modify persistent entity ResourceMonitor.ResourcePoint (
+  Timestamp: DateTime not null,
+  IsDemo: Boolean default false,
+  ProcessCpuPct: Decimal,
+  SystemCpuPct: Decimal,
+  HeapUsedMb: Long,
+  HeapCommittedMb: Long,
+  HeapMaxMb: Long,
+  NonHeapUsedMb: Long,
+  Threads: Long,
+  DeadlockedThreads: Long,
+  WebThreads: Long,
+  WebIdleThreads: Long,
+  WebQueue: Long,
+  PoolActive: Long,
+  PoolIdle: Long,
+  PoolWaiters: Long,
+  DbPingMs: Decimal,
+  Sessions: Long,
+  GcCountTotal: Long,
+  GcTimeMsTotal: Long,
+  SelectsTotal: Long,
+  UpdatesTotal: Long
+)
+index (Timestamp);
+
+/**
+ * One point of a chart: the samples of one time bucket, averaged (gauges) or turned into a per-minute rate (counters).
+ */
+@Position(880, 380)
+create or modify non-persistent entity ResourceMonitor.ChartPoint (
+  Timestamp: DateTime,
+  ProcessCpuAvg: Decimal,
+  SystemCpuAvg: Decimal,
+  HeapUsedMb: Decimal,
+  HeapCommittedMb: Decimal,
+  HeapMaxMb: Decimal,
+  NonHeapUsedMb: Decimal,
+  WebBusyThreads: Decimal,
+  WebQueue: Decimal,
+  PoolActive: Decimal,
+  PoolIdle: Decimal,
+  PoolWaiters: Decimal,
+  Sessions: Decimal,
+  SelectsPerMin: Decimal,
+  UpdatesPerMin: Decimal,
+  PoolMaxConnections: Decimal,
+  WebMaxThreads: Decimal
+);
+
+/**
+ * What the history store currently holds.
+ */
+@Position(1140, 380)
+create or modify non-persistent entity ResourceMonitor.HistoryStatus (
+  TotalPoints: Long,
+  DemoPoints: Long,
+  OldestPoint: DateTime,
+  NewestPoint: DateTime,
+  RetentionDays: Long,
+  CollectionEnabled: Boolean default false,
+  Message: String(500)
+);
+
+create or modify association ResourceMonitor.Snapshot_ThreadSample
+from ResourceMonitor.Snapshot to ResourceMonitor.ThreadSample
+type ReferenceSet;
+
+create or modify association ResourceMonitor.Snapshot_MemoryPoolSample
+from ResourceMonitor.Snapshot to ResourceMonitor.MemoryPoolSample
+type ReferenceSet;
+
+create or modify association ResourceMonitor.Snapshot_GcSample
+from ResourceMonitor.Snapshot to ResourceMonitor.GcSample
+type ReferenceSet;
+
+create or modify association ResourceMonitor.Snapshot_ChartPoint
+from ResourceMonitor.Snapshot to ResourceMonitor.ChartPoint
+type ReferenceSet;
+
+
+grant create, delete, read *, write * on entity ResourceMonitor.Snapshot to ResourceMonitor.Admin;
+
+
+grant create, read *, write * on entity ResourceMonitor.ThreadSample to ResourceMonitor.Admin;
+
+
+grant create, read *, write * on entity ResourceMonitor.MemoryPoolSample to ResourceMonitor.Admin;
+
+
+grant create, read *, write * on entity ResourceMonitor.GcSample to ResourceMonitor.Admin;
+
+
+grant create, delete, read *, write * on entity ResourceMonitor.ResourcePoint to ResourceMonitor.Admin;
+
+
+grant create, read *, write * on entity ResourceMonitor.ChartPoint to ResourceMonitor.Admin;
+
+
+grant create, read *, write * on entity ResourceMonitor.HistoryStatus to ResourceMonitor.Admin;
+
+/**
+ * Fills a ResourceMonitor.Snapshot with the application's current runtime, JVM, OS/CPU, memory, thread, GC, session count and database information. With IncludeDetails it also lists every thread (with stack trace), memory pool and garbage collector; without it only the numbers are collected, which is what the per-minute collector needs. Each section is collected independently, so one probe that fails on this platform leaves the others intact. No user names, JVM arguments, URLs or credentials are read.
+ */
+create or modify java action ResourceMonitor.JA_Capture(
+    /** The snapshot to (re)fill. Its previous child samples are deleted. */
+    Snapshot: ResourceMonitor.Snapshot not null,
+    /** Also list threads (with stack traces), memory pools and garbage collectors. Heavier; the dashboard needs it, the collector does not. */
+    IncludeDetails: Boolean not null
+) returns Boolean as $Captured
+as $$
+final long startedNanos = System.nanoTime();
+final com.mendix.systemwideinterfaces.core.IContext ctx = getContext();
+final com.mendix.systemwideinterfaces.core.IMendixObject snap = Snapshot.getMendixObject();
+final boolean details = IncludeDetails != null && IncludeDetails;
+final java.util.function.Function<Number, java.math.BigDecimal> dec = n -> {
+  if (n == null) return null;
+  double d = n.doubleValue();
+  if (Double.isNaN(d) || Double.isInfinite(d) || d < 0) return null;
+  return java.math.BigDecimal.valueOf(d).setScale(2, java.math.RoundingMode.HALF_UP);
+};
+final java.util.function.LongUnaryOperator mb = b -> b < 0 ? -1L : b / (1024L * 1024L);
+final java.util.function.Function<String, String> clip = s -> s == null ? null : (s.length() > 1000 ? s.substring(0, 997) + "..." : s);
+
+// ---- drop the previous child samples ----------------------------------------------------------
+final String[] assocs = {
+  "ResourceMonitor.Snapshot_ThreadSample", "ResourceMonitor.Snapshot_MemoryPoolSample", "ResourceMonitor.Snapshot_GcSample"
+};
+for (String assoc : assocs) {
+  try {
+    java.util.List<com.mendix.systemwideinterfaces.core.IMendixIdentifier> old = snap.getValue(ctx, assoc);
+    if (old != null && !old.isEmpty()) {
+      java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> objs = com.mendix.core.Core.retrieveIdList(ctx, old);
+      snap.setValue(ctx, assoc, new java.util.ArrayList<com.mendix.systemwideinterfaces.core.IMendixIdentifier>());
+      if (objs != null && !objs.isEmpty()) com.mendix.core.Core.delete(ctx, objs);
+    }
+  } catch (Exception e) {
+    // a stale child list must never stop a new capture
+  }
+}
+
+snap.setValue(ctx, "CapturedAt", new java.util.Date());
+
+// ---- application / runtime -------------------------------------------------------------------
+try {
+  snap.setValue(ctx, "MendixRuntimeVersion", com.mendix.core.Core.getRuntimeVersion());
+} catch (Throwable t) { }
+
+// ---- sessions: a count only, no user names ----------------------------------------------------
+try {
+  long total = 0;
+  for (com.mendix.systemwideinterfaces.core.ISession s : com.mendix.core.Core.getActiveSessions()) {
+    if (!s.isSystemSession()) total++;
+  }
+  snap.setValue(ctx, "ActiveSessions", Long.valueOf(total));
+} catch (Throwable t) { }
+
+// ---- JVM -------------------------------------------------------------------------------------
+try {
+  java.lang.management.RuntimeMXBean rt = java.lang.management.ManagementFactory.getRuntimeMXBean();
+  snap.setValue(ctx, "JvmName", rt.getVmName() + " " + rt.getVmVersion());
+  snap.setValue(ctx, "JavaVersion", System.getProperty("java.version"));
+  snap.setValue(ctx, "JvmStartedAt", new java.util.Date(rt.getStartTime()));
+} catch (Throwable t) { }
+
+// ---- OS and CPU ------------------------------------------------------------------------------
+try {
+  java.lang.management.OperatingSystemMXBean os = java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+  snap.setValue(ctx, "OsName", os.getName());
+  snap.setValue(ctx, "OsArch", os.getArch());
+  snap.setValue(ctx, "AvailableProcessors", Long.valueOf(os.getAvailableProcessors()));
+  if (os instanceof com.sun.management.OperatingSystemMXBean) {
+    com.sun.management.OperatingSystemMXBean sun = (com.sun.management.OperatingSystemMXBean) os;
+    double proc = sun.getProcessCpuLoad();
+    double sys = sun.getCpuLoad();
+    snap.setValue(ctx, "ProcessCpuLoadPercent", proc < 0 ? null : dec.apply(proc * 100.0));
+    snap.setValue(ctx, "SystemCpuLoadPercent", sys < 0 ? null : dec.apply(sys * 100.0));
+    snap.setValue(ctx, "PhysicalMemoryTotalMb", Long.valueOf(mb.applyAsLong(sun.getTotalMemorySize())));
+    snap.setValue(ctx, "PhysicalMemoryFreeMb", Long.valueOf(mb.applyAsLong(sun.getFreeMemorySize())));
+  }
+} catch (Throwable t) { }
+try {
+  java.io.File dir = new java.io.File(System.getProperty("user.dir", "."));
+  snap.setValue(ctx, "DiskTotalMb", Long.valueOf(mb.applyAsLong(dir.getTotalSpace())));
+  snap.setValue(ctx, "DiskFreeMb", Long.valueOf(mb.applyAsLong(dir.getUsableSpace())));
+} catch (Throwable t) { }
+
+// ---- memory ----------------------------------------------------------------------------------
+try {
+  java.lang.management.MemoryMXBean mem = java.lang.management.ManagementFactory.getMemoryMXBean();
+  java.lang.management.MemoryUsage heap = mem.getHeapMemoryUsage();
+  snap.setValue(ctx, "HeapUsedMb", Long.valueOf(mb.applyAsLong(heap.getUsed())));
+  snap.setValue(ctx, "HeapCommittedMb", Long.valueOf(mb.applyAsLong(heap.getCommitted())));
+  snap.setValue(ctx, "HeapMaxMb", Long.valueOf(mb.applyAsLong(heap.getMax())));
+  snap.setValue(ctx, "NonHeapUsedMb", Long.valueOf(mb.applyAsLong(mem.getNonHeapMemoryUsage().getUsed())));
+} catch (Throwable t) { }
+if (details) {
+  try {
+    final java.util.List<com.mendix.systemwideinterfaces.core.IMendixIdentifier> ids = new java.util.ArrayList<>();
+    for (java.lang.management.MemoryPoolMXBean p : java.lang.management.ManagementFactory.getMemoryPoolMXBeans()) {
+      java.lang.management.MemoryUsage u = p.getUsage();
+      java.lang.management.MemoryUsage peak = p.getPeakUsage();
+      // code cache and compressed class space are never actionable, so they are left out
+      if (u == null || p.getName().startsWith("Code") || p.getName().startsWith("Compressed Class")) continue;
+      com.mendix.systemwideinterfaces.core.IMendixObject o = com.mendix.core.Core.instantiate(ctx, "ResourceMonitor.MemoryPoolSample");
+      o.setValue(ctx, "Name", p.getName());
+      o.setValue(ctx, "PoolType", p.getType().toString());
+      o.setValue(ctx, "UsedMb", dec.apply(u.getUsed() / 1048576.0));
+      o.setValue(ctx, "CommittedMb", dec.apply(u.getCommitted() / 1048576.0));
+      o.setValue(ctx, "MaxMb", u.getMax() < 0 ? null : dec.apply(u.getMax() / 1048576.0));
+      o.setValue(ctx, "PeakUsedMb", peak == null ? null : dec.apply(peak.getUsed() / 1048576.0));
+      o.setValue(ctx, "UsedPercentOfMax", u.getMax() <= 0 ? null : dec.apply(u.getUsed() * 100.0 / u.getMax()));
+      ids.add(o.getId());
+    }
+    snap.setValue(ctx, "ResourceMonitor.Snapshot_MemoryPoolSample", ids);
+  } catch (Throwable t) { }
+}
+
+// ---- garbage collection ----------------------------------------------------------------------
+try {
+  final java.util.List<com.mendix.systemwideinterfaces.core.IMendixIdentifier> ids = new java.util.ArrayList<>();
+  long count = 0;
+  long time = 0;
+  for (java.lang.management.GarbageCollectorMXBean g : java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
+    if (details) {
+      com.mendix.systemwideinterfaces.core.IMendixObject o = com.mendix.core.Core.instantiate(ctx, "ResourceMonitor.GcSample");
+      o.setValue(ctx, "Name", g.getName());
+      o.setValue(ctx, "CollectionCount", Long.valueOf(g.getCollectionCount()));
+      o.setValue(ctx, "CollectionTimeMs", Long.valueOf(g.getCollectionTime()));
+      o.setValue(ctx, "MemoryPools", clip.apply(String.join(", ", g.getMemoryPoolNames())));
+      ids.add(o.getId());
+    }
+    if (g.getCollectionCount() > 0) count += g.getCollectionCount();
+    if (g.getCollectionTime() > 0) time += g.getCollectionTime();
+  }
+  if (details) snap.setValue(ctx, "ResourceMonitor.Snapshot_GcSample", ids);
+  snap.setValue(ctx, "GcCollectionCount", Long.valueOf(count));
+  snap.setValue(ctx, "GcCollectionTimeMs", Long.valueOf(time));
+} catch (Throwable t) { }
+
+// ---- threads ---------------------------------------------------------------------------------
+try {
+  java.lang.management.ThreadMXBean tm = java.lang.management.ManagementFactory.getThreadMXBean();
+  snap.setValue(ctx, "ThreadCount", Long.valueOf(tm.getThreadCount()));
+
+  long[] dead = tm.findDeadlockedThreads();
+  snap.setValue(ctx, "DeadlockedThreadCount", Long.valueOf(dead == null ? 0L : dead.length));
+  if (dead != null) {
+    java.util.List<String> dn = new java.util.ArrayList<>();
+    for (java.lang.management.ThreadInfo ti : tm.getThreadInfo(dead)) {
+      if (ti != null) dn.add(ti.getThreadId() + " " + ti.getThreadName());
+    }
+    snap.setValue(ctx, "DeadlockedThreads", String.join("\n", dn));
+  }
+
+  if (details) {
+    final java.util.List<com.mendix.systemwideinterfaces.core.IMendixIdentifier> ids = new java.util.ArrayList<>();
+    java.lang.management.ThreadInfo[] infos = tm.dumpAllThreads(false, false);
+    java.util.Arrays.sort(infos, java.util.Comparator.comparing(ti -> ti.getThreadName().toLowerCase()));
+    boolean cpuTime = tm.isThreadCpuTimeSupported() && tm.isThreadCpuTimeEnabled();
+    for (java.lang.management.ThreadInfo ti : infos) {
+      com.mendix.systemwideinterfaces.core.IMendixObject o = com.mendix.core.Core.instantiate(ctx, "ResourceMonitor.ThreadSample");
+      o.setValue(ctx, "ThreadId", Long.valueOf(ti.getThreadId()));
+      o.setValue(ctx, "Name", clip.apply(ti.getThreadName()));
+      o.setValue(ctx, "State", ti.getThreadState().toString());
+      o.setValue(ctx, "IsDaemon", ti.isDaemon());
+      o.setValue(ctx, "Priority", Long.valueOf(ti.getPriority()));
+      if (cpuTime) {
+        long ns = tm.getThreadCpuTime(ti.getThreadId());
+        o.setValue(ctx, "CpuTimeMs", ns < 0 ? null : Long.valueOf(ns / 1_000_000L));
+      }
+      o.setValue(ctx, "BlockedCount", Long.valueOf(ti.getBlockedCount()));
+      o.setValue(ctx, "WaitedCount", Long.valueOf(ti.getWaitedCount()));
+      o.setValue(ctx, "BlockedOnLock", clip.apply(ti.getLockName()));
+      o.setValue(ctx, "LockOwnerName", clip.apply(ti.getLockOwnerName()));
+      StackTraceElement[] st = ti.getStackTrace();
+      if (st != null && st.length > 0) {
+        o.setValue(ctx, "TopFrame", clip.apply(st[0].toString()));
+        StringBuilder sb = new StringBuilder();
+        int max = Math.min(st.length, 60);
+        for (int i = 0; i < max; i++) sb.append("at ").append(st[i]).append('\n');
+        if (st.length > max) sb.append("... ").append(st.length - max).append(" more frames\n");
+        o.setValue(ctx, "StackTrace", sb.toString());
+      }
+      ids.add(o.getId());
+    }
+    snap.setValue(ctx, "ResourceMonitor.Snapshot_ThreadSample", ids);
+  }
+} catch (Throwable t) { }
+
+// ---- database: product, driver and speed. The URL and the database user are deliberately not read ------
+try {
+  final String[] db = new String[6];
+  final long[] pingNanos = { -1L };
+  com.mendix.core.Core.dataStorage().executeWithConnection(connection -> {
+    try {
+      java.sql.DatabaseMetaData md = connection.getMetaData();
+      db[0] = md.getDatabaseProductName();
+      db[1] = md.getDatabaseProductVersion();
+      db[2] = md.getDriverName();
+      db[3] = md.getDriverVersion();
+      switch (connection.getTransactionIsolation()) {
+        case java.sql.Connection.TRANSACTION_READ_UNCOMMITTED: db[4] = "READ_UNCOMMITTED"; break;
+        case java.sql.Connection.TRANSACTION_READ_COMMITTED: db[4] = "READ_COMMITTED"; break;
+        case java.sql.Connection.TRANSACTION_REPEATABLE_READ: db[4] = "REPEATABLE_READ"; break;
+        case java.sql.Connection.TRANSACTION_SERIALIZABLE: db[4] = "SERIALIZABLE"; break;
+        default: db[4] = "NONE"; break;
+      }
+      long t0 = System.nanoTime();
+      boolean ok = connection.isValid(5);
+      pingNanos[0] = System.nanoTime() - t0;
+      if (!ok) db[5] = "Connection.isValid returned false";
+    } catch (Exception e) {
+      db[5] = e.getClass().getSimpleName();
+    }
+    return null;
+  });
+  snap.setValue(ctx, "DbProductName", db[0]);
+  snap.setValue(ctx, "DbProductVersion", clip.apply(db[1]));
+  snap.setValue(ctx, "DbDriverName", db[2]);
+  snap.setValue(ctx, "DbDriverVersion", db[3]);
+  snap.setValue(ctx, "DbTransactionIsolation", db[4]);
+  snap.setValue(ctx, "DbPingMs", pingNanos[0] < 0 ? null : java.math.BigDecimal.valueOf(pingNanos[0] / 1_000_000.0).setScale(2, java.math.RoundingMode.HALF_UP));
+  snap.setValue(ctx, "DbError", db[5]);
+} catch (Throwable t) {
+  try { snap.setValue(ctx, "DbError", t.getClass().getSimpleName()); } catch (Throwable ignore) { }
+}
+
+// ---- Mendix data storage counters, Jetty web server and database connection pool, via JMX -----------
+try {
+  final javax.management.MBeanServer srv = java.lang.management.ManagementFactory.getPlatformMBeanServer();
+  final java.util.function.BiFunction<javax.management.ObjectName, String, Long> num = (on, attr) -> {
+    try {
+      Object v = srv.getAttribute(on, attr);
+      return v instanceof Number ? Long.valueOf(((Number) v).longValue()) : null;
+    } catch (Throwable ignore) {
+      return null;
+    }
+  };
+  javax.management.ObjectName store = new javax.management.ObjectName("com.mendix:type=DataStorage");
+  snap.setValue(ctx, "DbSelects", num.apply(store, "Selects"));
+  snap.setValue(ctx, "DbUpdates", num.apply(store, "Updates"));
+
+  javax.management.ObjectName jettyPool = new javax.management.ObjectName("com.mendix:type=JettyThreadPool");
+  snap.setValue(ctx, "WebThreadsTotal", num.apply(jettyPool, "Threads"));
+  snap.setValue(ctx, "WebThreadsIdle", num.apply(jettyPool, "IdleThreads"));
+  snap.setValue(ctx, "WebThreadsMax", num.apply(jettyPool, "MaxThreads"));
+  snap.setValue(ctx, "WebQueueSize", num.apply(jettyPool, "QueueSize"));
+
+  long active = 0, idle = 0, waiters = 0, maxTotal = 0;
+  boolean anyPool = false;
+  for (javax.management.ObjectName pool : srv.queryNames(new javax.management.ObjectName("org.apache.commons.pool2:type=GenericObjectPool,*"), null)) {
+    anyPool = true;
+    Long v;
+    if ((v = num.apply(pool, "NumActive")) != null) active += v;
+    if ((v = num.apply(pool, "NumIdle")) != null) idle += v;
+    if ((v = num.apply(pool, "NumWaiters")) != null) waiters += v;
+    if ((v = num.apply(pool, "MaxTotal")) != null) maxTotal = Math.max(maxTotal, v);
+  }
+  if (anyPool) {
+    snap.setValue(ctx, "DbPoolActive", Long.valueOf(active));
+    snap.setValue(ctx, "DbPoolIdle", Long.valueOf(idle));
+    snap.setValue(ctx, "DbPoolWaiters", Long.valueOf(waiters));
+    snap.setValue(ctx, "DbPoolMaxTotal", Long.valueOf(maxTotal));
+  }
+} catch (Throwable t) { }
+
+snap.setValue(ctx, "CaptureDurationMs", Long.valueOf((System.nanoTime() - startedNanos) / 1_000_000L));
+return true;
+$$;
+
+/**
+ * Stores the current snapshot as one persistent per-minute ResourcePoint and deletes points older than the retention period. Called by the scheduled collector.
+ */
+create or modify java action ResourceMonitor.JA_RecordPoint(
+    /** A freshly captured snapshot (no details needed). */
+    Snapshot: ResourceMonitor.Snapshot not null,
+    /** Points older than this many days are deleted. Zero or less keeps everything. */
+    RetentionDays: Integer not null
+) returns Boolean as $Recorded
+as $$
+final com.mendix.systemwideinterfaces.core.IContext ctx = getContext();
+final com.mendix.systemwideinterfaces.core.IMendixObject snap = Snapshot.getMendixObject();
+final String[][] map = {
+  {"ProcessCpuPct", "ProcessCpuLoadPercent"}, {"SystemCpuPct", "SystemCpuLoadPercent"},
+  {"HeapUsedMb", "HeapUsedMb"}, {"HeapCommittedMb", "HeapCommittedMb"}, {"HeapMaxMb", "HeapMaxMb"},
+  {"NonHeapUsedMb", "NonHeapUsedMb"},
+  {"Threads", "ThreadCount"}, {"DeadlockedThreads", "DeadlockedThreadCount"},
+  {"WebThreads", "WebThreadsTotal"}, {"WebIdleThreads", "WebThreadsIdle"}, {"WebQueue", "WebQueueSize"},
+  {"PoolActive", "DbPoolActive"}, {"PoolIdle", "DbPoolIdle"}, {"PoolWaiters", "DbPoolWaiters"},
+  {"DbPingMs", "DbPingMs"}, {"Sessions", "ActiveSessions"},
+  {"GcCountTotal", "GcCollectionCount"}, {"GcTimeMsTotal", "GcCollectionTimeMs"},
+  {"SelectsTotal", "DbSelects"}, {"UpdatesTotal", "DbUpdates"}
+};
+com.mendix.systemwideinterfaces.core.IMendixObject point = com.mendix.core.Core.instantiate(ctx, "ResourceMonitor.ResourcePoint");
+java.util.Date at = snap.getValue(ctx, "CapturedAt");
+point.setValue(ctx, "Timestamp", at == null ? new java.util.Date() : at);
+point.setValue(ctx, "IsDemo", false);
+for (String[] m : map) {
+  point.setValue(ctx, m[0], snap.getValue(ctx, m[1]));
+}
+com.mendix.core.Core.commit(ctx, point);
+
+if (RetentionDays != null && RetentionDays > 0) {
+  java.util.Date cutoff = new java.util.Date(System.currentTimeMillis() - RetentionDays * 86_400_000L);
+  while (true) {
+    java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> old = com.mendix.core.Core
+        .createXPathQuery("//ResourceMonitor.ResourcePoint[Timestamp < $cutoff]")
+        .setVariable("cutoff", cutoff.getTime()).setAmount(2000).execute(ctx);
+    if (old.isEmpty()) break;
+    com.mendix.core.Core.delete(ctx, old);
+    if (old.size() < 2000) break;
+  }
+}
+return true;
+$$;
+
+/**
+ * Fills the snapshot's ChartPoint list from the stored per-minute history between FromTime and ToTime, grouped into at most MaxBuckets time buckets. Gauges are averaged per bucket, except the web request queue and the database connection waiters, which keep the bucket maximum so a short spike is not averaged away; database counters become per-minute rates. The pool and web thread limits are taken from the snapshot so the charts can draw a limit line.
+ */
+create or modify java action ResourceMonitor.JA_LoadHistory(
+    /** The snapshot whose chart points are replaced. */
+    Snapshot: ResourceMonitor.Snapshot not null,
+    /** Start of the period. */
+    FromTime: DateTime not null,
+    /** End of the period. */
+    ToTime: DateTime not null,
+    /** Upper limit for chart points per series. */
+    MaxBuckets: Integer not null
+) returns Boolean as $Loaded
+as $$
+final com.mendix.systemwideinterfaces.core.IContext ctx = getContext();
+final com.mendix.systemwideinterfaces.core.IMendixObject snap = Snapshot.getMendixObject();
+final String assoc = "ResourceMonitor.Snapshot_ChartPoint";
+
+// drop the previous chart points
+try {
+  java.util.List<com.mendix.systemwideinterfaces.core.IMendixIdentifier> old = snap.getValue(ctx, assoc);
+  if (old != null && !old.isEmpty()) {
+    java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> objs = com.mendix.core.Core.retrieveIdList(ctx, old);
+    snap.setValue(ctx, assoc, new java.util.ArrayList<com.mendix.systemwideinterfaces.core.IMendixIdentifier>());
+    if (objs != null && !objs.isEmpty()) com.mendix.core.Core.delete(ctx, objs);
+  }
+} catch (Exception e) { }
+
+final long rangeMin = Math.max(1L, (ToTime.getTime() - FromTime.getTime()) / 60_000L);
+final long maxBuckets = Math.max(10L, MaxBuckets == null ? 480L : MaxBuckets);
+final long bucketMin = Math.max(1L, (rangeMin + maxBuckets - 1) / maxBuckets);
+final long bucketMs = bucketMin * 60_000L;
+final long nowMs = ToTime.getTime();
+final long fromMs = FromTime.getTime();
+final int nBuckets = (int) ((rangeMin * 60_000L) / bucketMs) + 1;
+
+final String[] G = {"ProcessCpuPct", "SystemCpuPct", "HeapUsedMb", "HeapCommittedMb", "HeapMaxMb", "NonHeapUsedMb",
+  "WebThreads", "WebIdleThreads", "WebQueue", "PoolActive", "PoolIdle", "PoolWaiters", "Sessions"};
+final String[] T = {"SelectsTotal", "UpdatesTotal"};
+final double[][] gSum = new double[nBuckets][G.length];
+final double[][] gMax = new double[nBuckets][G.length];
+final int[][] gCnt = new int[nBuckets][G.length];
+final double[][] rSum = new double[nBuckets][T.length];
+final int[][] rCnt = new int[nBuckets][T.length];
+final int[] pts = new int[nBuckets];
+
+final java.util.function.ToDoubleBiFunction<com.mendix.systemwideinterfaces.core.IMendixObject, String> num = (o, a) -> {
+  Object v = o.getValue(ctx, a);
+  return v instanceof Number ? ((Number) v).doubleValue() : Double.NaN;
+};
+
+long total = 0;
+long firstMs = -1;
+long lastMs = -1;
+long prevMs = -1;
+double[] prevTot = new double[T.length];
+int offset = 0;
+final int page = 5000;
+final java.util.Date from = new java.util.Date(fromMs - 5L * 60_000L);
+while (true) {
+  java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> rows = com.mendix.core.Core
+      .createXPathQuery("//ResourceMonitor.ResourcePoint[Timestamp >= $from]")
+      .setVariable("from", from.getTime()).addSort("Timestamp", true).setAmount(page).setOffset(offset).execute(ctx);
+  for (com.mendix.systemwideinterfaces.core.IMendixObject r : rows) {
+    java.util.Date ts = r.getValue(ctx, "Timestamp");
+    if (ts == null) continue;
+    long t = ts.getTime();
+    double[] tot = new double[T.length];
+    for (int i = 0; i < T.length; i++) tot[i] = num.applyAsDouble(r, T[i]);
+    if (t >= fromMs && t <= nowMs) {
+      int b = (int) ((t - fromMs) / bucketMs);
+      if (b >= nBuckets) b = nBuckets - 1;
+      pts[b]++;
+      total++;
+      if (firstMs < 0) firstMs = t;
+      lastMs = t;
+      for (int i = 0; i < G.length; i++) {
+        double v = num.applyAsDouble(r, G[i]);
+        if (Double.isNaN(v)) continue;
+        gSum[b][i] += v;
+        gCnt[b][i]++;
+        if (gCnt[b][i] == 1 || v > gMax[b][i]) gMax[b][i] = v;
+      }
+      if (prevMs >= 0) {
+        double minutes = (t - prevMs) / 60_000.0;
+        // gaps of more than 30 minutes (collector was off) or a runtime restart (counters went back) give no rate
+        if (minutes > 0 && minutes <= 30) {
+          for (int i = 0; i < T.length; i++) {
+            if (Double.isNaN(tot[i]) || Double.isNaN(prevTot[i]) || tot[i] < prevTot[i]) continue;
+            rSum[b][i] += (tot[i] - prevTot[i]) / minutes;
+            rCnt[b][i]++;
+          }
+        }
+      }
+    }
+    prevMs = t;
+    prevTot = tot;
+  }
+  if (rows.size() < page) break;
+  offset += page;
+}
+
+final java.util.function.Function<Double, java.math.BigDecimal> dec = d -> d == null || d.isNaN() || d.isInfinite() ? null
+    : java.math.BigDecimal.valueOf(d).setScale(2, java.math.RoundingMode.HALF_UP);
+final Object poolLimit = snap.getValue(ctx, "DbPoolMaxTotal");
+final Object webLimit = snap.getValue(ctx, "WebThreadsMax");
+final java.math.BigDecimal poolMax = poolLimit instanceof Number ? dec.apply(((Number) poolLimit).doubleValue()) : null;
+final java.math.BigDecimal webMax = webLimit instanceof Number ? dec.apply(((Number) webLimit).doubleValue()) : null;
+
+final java.util.List<com.mendix.systemwideinterfaces.core.IMendixIdentifier> ids = new java.util.ArrayList<>();
+for (int b = 0; b < nBuckets; b++) {
+  if (pts[b] == 0) continue;
+  com.mendix.systemwideinterfaces.core.IMendixObject o = com.mendix.core.Core.instantiate(ctx, "ResourceMonitor.ChartPoint");
+  o.setValue(ctx, "Timestamp", new java.util.Date(fromMs + b * bucketMs));
+  final int bb = b;
+  final java.util.function.IntFunction<Double> avg = i -> gCnt[bb][i] == 0 ? null : gSum[bb][i] / gCnt[bb][i];
+  final java.util.function.IntFunction<Double> max = i -> gCnt[bb][i] == 0 ? null : gMax[bb][i];
+  final java.util.function.IntFunction<Double> rate = i -> rCnt[bb][i] == 0 ? null : rSum[bb][i] / rCnt[bb][i];
+  o.setValue(ctx, "ProcessCpuAvg", dec.apply(avg.apply(0)));
+  o.setValue(ctx, "SystemCpuAvg", dec.apply(avg.apply(1)));
+  o.setValue(ctx, "HeapUsedMb", dec.apply(avg.apply(2)));
+  o.setValue(ctx, "HeapCommittedMb", dec.apply(avg.apply(3)));
+  o.setValue(ctx, "HeapMaxMb", dec.apply(avg.apply(4)));
+  o.setValue(ctx, "NonHeapUsedMb", dec.apply(avg.apply(5)));
+  Double webTotal = avg.apply(6);
+  Double webIdle = avg.apply(7);
+  o.setValue(ctx, "WebBusyThreads", webTotal == null || webIdle == null ? null : dec.apply(Math.max(0.0, webTotal - webIdle)));
+  o.setValue(ctx, "WebQueue", dec.apply(max.apply(8)));
+  o.setValue(ctx, "PoolActive", dec.apply(avg.apply(9)));
+  o.setValue(ctx, "PoolIdle", dec.apply(avg.apply(10)));
+  o.setValue(ctx, "PoolWaiters", dec.apply(max.apply(11)));
+  o.setValue(ctx, "Sessions", dec.apply(avg.apply(12)));
+  o.setValue(ctx, "SelectsPerMin", dec.apply(rate.apply(0)));
+  o.setValue(ctx, "UpdatesPerMin", dec.apply(rate.apply(1)));
+  o.setValue(ctx, "PoolMaxConnections", poolMax);
+  o.setValue(ctx, "WebMaxThreads", webMax);
+  ids.add(o.getId());
+}
+snap.setValue(ctx, assoc, ids);
+snap.setValue(ctx, "BucketMinutes", Long.valueOf(bucketMin));
+snap.setValue(ctx, "HistorySamples", Long.valueOf(total));
+snap.setValue(ctx, "HistoryFrom", firstMs < 0 ? null : new java.util.Date(firstMs));
+snap.setValue(ctx, "HistoryTo", lastMs < 0 ? null : new java.util.Date(lastMs));
+snap.setValue(ctx, "HistoryNote", total == 0
+    ? "No samples stored for this period yet. The collector stores one sample per minute once the application is running."
+    : total + " samples, one point per " + bucketMin + (bucketMin == 1 ? " minute" : " minutes") + ".");
+return true;
+$$;
+
+/**
+ * Creates synthetic per-minute history, flagged IsDemo, for the given number of days up to the oldest real sample, so the charts can be tried before real history exists. Existing demo samples are replaced. Returns the number of samples created.
+ */
+create or modify java action ResourceMonitor.JA_GenerateDemoHistory(
+    /** How many days back to generate. */
+    Days: Integer not null
+) returns Integer as $Created
+as $$
+final com.mendix.systemwideinterfaces.core.IContext ctx = getContext();
+// replace earlier demo data
+while (true) {
+  java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> old = com.mendix.core.Core
+      .createXPathQuery("//ResourceMonitor.ResourcePoint[IsDemo = true()]").setAmount(2000).execute(ctx);
+  if (old.isEmpty()) break;
+  com.mendix.core.Core.delete(ctx, old);
+  if (old.size() < 2000) break;
+}
+long endMs = System.currentTimeMillis();
+java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> firstReal = com.mendix.core.Core
+    .createXPathQuery("//ResourceMonitor.ResourcePoint[IsDemo = false()]").addSort("Timestamp", true).setAmount(1).execute(ctx);
+if (!firstReal.isEmpty()) {
+  java.util.Date d = firstReal.get(0).getValue(ctx, "Timestamp");
+  if (d != null) endMs = d.getTime() - 60_000L;
+}
+final long minute = 60_000L;
+endMs = (endMs / minute) * minute;
+final long startMs = endMs - Math.max(1L, Days == null ? 14L : Days) * 1440L * minute;
+final java.util.Random rnd = new java.util.Random(20261029L);
+final java.util.Calendar cal = java.util.Calendar.getInstance();
+final java.util.function.Function<Double, java.math.BigDecimal> dec = d -> java.math.BigDecimal.valueOf(Math.max(0.0, d)).setScale(2, java.math.RoundingMode.HALF_UP);
+
+double gcCount = 0, gcTime = 0, selects = 0, updates = 0;
+long spikeLeft = 0;
+double spikePower = 0;
+long idx = 0;
+int created = 0;
+java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> batch = new java.util.ArrayList<>();
+for (long t = startMs; t <= endMs; t += minute, idx++) {
+  cal.setTimeInMillis(t);
+  double hour = cal.get(java.util.Calendar.HOUR_OF_DAY) + cal.get(java.util.Calendar.MINUTE) / 60.0;
+  int dow = cal.get(java.util.Calendar.DAY_OF_WEEK);
+  boolean weekend = dow == java.util.Calendar.SATURDAY || dow == java.util.Calendar.SUNDAY;
+  // office-hours curve peaking mid afternoon, flatter at the weekend
+  double activity = Math.max(0.03, 0.5 + 0.5 * Math.sin((hour - 9.0) / 24.0 * 2.0 * Math.PI)) * (weekend ? 0.35 : 1.0);
+  activity = Math.min(1.0, activity * (0.85 + 0.3 * rnd.nextDouble()));
+  if (spikeLeft <= 0 && rnd.nextInt(900) == 0) { spikeLeft = 3 + rnd.nextInt(8); spikePower = 0.5 + 0.5 * rnd.nextDouble(); }
+  boolean spike = spikeLeft > 0;
+  if (spike) spikeLeft--;
+
+  double proc = 3 + 38 * activity * (0.6 + 0.6 * rnd.nextDouble()) + (spike ? 45 * spikePower : 0);
+  proc = Math.min(98, proc);
+  double sys = Math.min(99, proc + 8 + 6 * rnd.nextDouble());
+  long threads = Math.round(68 + 34 * activity + (spike ? 25 * spikePower : 0) + 3 * rnd.nextGaussian());
+  long sessions = Math.round(1 + 70 * activity * (0.7 + 0.5 * rnd.nextDouble()));
+  long web = Math.round(12 + 10 * activity + (spike ? 20 * spikePower : 0));
+  long busy = Math.min(web, Math.round(1 + 9 * activity * rnd.nextDouble() + (spike ? 15 * spikePower : 0)));
+  long poolActive = Math.min(50, Math.round(0.5 + 9 * activity * rnd.nextDouble() + (spike ? 25 * spikePower : 0)));
+  long poolIdle = Math.max(0, Math.min(50 - poolActive, 12 - poolActive));
+  long waiters = spike && poolActive >= 40 ? Math.round(6 * spikePower) : 0;
+  // heap grows through a cycle and drops when a collection runs
+  long cycle = 29 + (idx / 400) % 7;
+  double growth = (idx % cycle) / (double) cycle;
+  long heapUsed = Math.round(620 + growth * (700 + 900 * activity) + 25 * rnd.nextDouble());
+  boolean gcNow = (idx % cycle) == 0;
+  gcCount += (gcNow ? 3 : 0) + (rnd.nextInt(3) == 0 ? 1 : 0);
+  gcTime += (gcNow ? 80 + 120 * rnd.nextDouble() : 4 * rnd.nextDouble()) * (1 + activity);
+  selects += 20 + 480 * activity * (0.6 + 0.8 * rnd.nextDouble());
+  updates += 1 + 30 * activity * rnd.nextDouble();
+
+  com.mendix.systemwideinterfaces.core.IMendixObject p = com.mendix.core.Core.instantiate(ctx, "ResourceMonitor.ResourcePoint");
+  p.setValue(ctx, "Timestamp", new java.util.Date(t));
+  p.setValue(ctx, "IsDemo", true);
+  p.setValue(ctx, "ProcessCpuPct", dec.apply(proc));
+  p.setValue(ctx, "SystemCpuPct", dec.apply(sys));
+  p.setValue(ctx, "HeapUsedMb", Long.valueOf(heapUsed));
+  p.setValue(ctx, "HeapCommittedMb", Long.valueOf(Math.max(2048L, Math.round(heapUsed * 1.25))));
+  p.setValue(ctx, "HeapMaxMb", Long.valueOf(8192L));
+  p.setValue(ctx, "NonHeapUsedMb", Long.valueOf(Math.round(138 + idx / 20000.0 * 12 + 2 * rnd.nextDouble())));
+  p.setValue(ctx, "Threads", Long.valueOf(threads));
+  p.setValue(ctx, "DeadlockedThreads", Long.valueOf(0L));
+  p.setValue(ctx, "WebThreads", Long.valueOf(web));
+  p.setValue(ctx, "WebIdleThreads", Long.valueOf(Math.max(0, web - busy)));
+  p.setValue(ctx, "WebQueue", Long.valueOf(spike ? Math.round(5 * spikePower * rnd.nextDouble()) : 0L));
+  p.setValue(ctx, "PoolActive", Long.valueOf(poolActive));
+  p.setValue(ctx, "PoolIdle", Long.valueOf(poolIdle));
+  p.setValue(ctx, "PoolWaiters", Long.valueOf(waiters));
+  p.setValue(ctx, "DbPingMs", dec.apply(0.4 + 1.2 * activity * rnd.nextDouble() + (spike ? 6 * spikePower : 0)));
+  p.setValue(ctx, "Sessions", Long.valueOf(sessions));
+  p.setValue(ctx, "GcCountTotal", Long.valueOf(Math.round(gcCount)));
+  p.setValue(ctx, "GcTimeMsTotal", Long.valueOf(Math.round(gcTime)));
+  p.setValue(ctx, "SelectsTotal", Long.valueOf(Math.round(selects)));
+  p.setValue(ctx, "UpdatesTotal", Long.valueOf(Math.round(updates)));
+  batch.add(p);
+  created++;
+  if (batch.size() >= 1000) {
+    com.mendix.core.Core.commit(ctx, batch);
+    batch = new java.util.ArrayList<>();
+  }
+}
+if (!batch.isEmpty()) com.mendix.core.Core.commit(ctx, batch);
+return Long.valueOf(created);
+$$;
+
+/**
+ * Deletes stored history. With DemoOnly set, only the synthetic samples go. Returns the number of samples deleted.
+ */
+create or modify java action ResourceMonitor.JA_DeleteHistory(
+    /** Delete only samples created by JA_GenerateDemoHistory. */
+    DemoOnly: Boolean not null
+) returns Integer as $Deleted
+as $$
+final com.mendix.systemwideinterfaces.core.IContext ctx = getContext();
+final String xpath = (DemoOnly != null && DemoOnly) ? "//ResourceMonitor.ResourcePoint[IsDemo = true()]" : "//ResourceMonitor.ResourcePoint";
+long deleted = 0;
+while (true) {
+  java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> rows = com.mendix.core.Core.createXPathQuery(xpath).setAmount(2000).execute(ctx);
+  if (rows.isEmpty()) break;
+  com.mendix.core.Core.delete(ctx, rows);
+  deleted += rows.size();
+  if (rows.size() < 2000) break;
+}
+return Long.valueOf(deleted);
+$$;
+
+/**
+ * Fills a HistoryStatus with the number, age and demo share of the stored samples.
+ */
+create or modify java action ResourceMonitor.JA_HistoryStatus(
+    /** The status object to fill. */
+    Status: ResourceMonitor.HistoryStatus not null
+) returns Boolean as $Filled
+as $$
+final com.mendix.systemwideinterfaces.core.IContext ctx = getContext();
+final com.mendix.systemwideinterfaces.core.IMendixObject st = Status.getMendixObject();
+Long total = com.mendix.core.Core.createXPathQuery("COUNT(//ResourceMonitor.ResourcePoint)").executeAggregateLong(ctx);
+Long demo = com.mendix.core.Core.createXPathQuery("COUNT(//ResourceMonitor.ResourcePoint[IsDemo = true()])").executeAggregateLong(ctx);
+st.setValue(ctx, "TotalPoints", total == null ? Long.valueOf(0) : total);
+st.setValue(ctx, "DemoPoints", demo == null ? Long.valueOf(0) : demo);
+java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> first = com.mendix.core.Core
+    .createXPathQuery("//ResourceMonitor.ResourcePoint").addSort("Timestamp", true).setAmount(1).execute(ctx);
+java.util.List<com.mendix.systemwideinterfaces.core.IMendixObject> last = com.mendix.core.Core
+    .createXPathQuery("//ResourceMonitor.ResourcePoint").addSort("Timestamp", false).setAmount(1).execute(ctx);
+st.setValue(ctx, "OldestPoint", first.isEmpty() ? null : first.get(0).getValue(ctx, "Timestamp"));
+st.setValue(ctx, "NewestPoint", last.isEmpty() ? null : last.get(0).getValue(ctx, "Timestamp"));
+return true;
+$$;
+
+/**
+ * Data source of the dashboard page: a fresh live snapshot with details, plus the charts for the default range.
+ */
+create or modify microflow ResourceMonitor.DS_Snapshot ()
+returns ResourceMonitor.Snapshot as $Snapshot
+begin
+  @position(360, 200)
+  @curve(to: (-15, 0))
+  $Snapshot = call microflow ResourceMonitor.SUB_CaptureSnapshot(IncludeDetails = true);
+  @curve(from: (15, 0))
+  $Done = call microflow ResourceMonitor.SUB_LoadHistory(Snapshot = $Snapshot);
+  @position(630, 200)
+  return $Snapshot;
+end;
+
+grant execute on microflow ResourceMonitor.DS_Snapshot to ResourceMonitor.Admin;
+
+/**
+ * Re-captures the live values in place and reloads the charts for the selected range.
+ */
+create or modify microflow ResourceMonitor.ACT_Refresh (
+  $Snapshot: ResourceMonitor.Snapshot
+)
+returns Boolean as $Done
+begin
+  @position(360, 200)
+  @curve(to: (-15, 0))
+  $Captured = call java action ResourceMonitor.JA_Capture(Snapshot = $Snapshot, IncludeDetails = true);
+  @curve(from: (15, 0))
+  $Loaded = call microflow ResourceMonitor.SUB_LoadHistory(Snapshot = $Snapshot);
+  @position(630, 200)
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.ACT_Refresh to ResourceMonitor.Admin;
+
+/**
+ * Writes a one-line summary of the key resource numbers to the log node ResourceMonitor. Suitable for a scheduled event.
+ */
+create or modify microflow ResourceMonitor.ACT_LogSnapshot ()
+returns Boolean as $Done
+begin
+  $Snapshot = call microflow ResourceMonitor.SUB_CaptureSnapshot(IncludeDetails = false);
+  log node 'ResourceMonitor' '{1}' with ({1} = 'heap ' + toString($Snapshot/HeapUsedMb) + '/' + toString($Snapshot/HeapMaxMb) + ' MB, threads ' + toString($Snapshot/ThreadCount) + ', sessions ' + toString($Snapshot/ActiveSessions) + ', db ping ' + toString($Snapshot/DbPingMs) + ' ms, deadlocked ' + toString($Snapshot/DeadlockedThreadCount));
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.ACT_LogSnapshot to ResourceMonitor.Admin;
+
+/**
+ * Minutes covered by a chart range.
+ */
+create or modify microflow ResourceMonitor.SUB_RangeMinutes (
+  $Range: enum ResourceMonitor.ChartRange
+)
+returns Integer as $Minutes
+begin
+  declare $Minutes Integer = 1440;
+  if $Range = ResourceMonitor.ChartRange.Last1h then
+    set $Minutes = 60;
+  end if;
+  if $Range = ResourceMonitor.ChartRange.Last6h then
+    set $Minutes = 360;
+  end if;
+  if $Range = ResourceMonitor.ChartRange.Last24h then
+    set $Minutes = 1440;
+  end if;
+  if $Range = ResourceMonitor.ChartRange.Last3d then
+    set $Minutes = 4320;
+  end if;
+  if $Range = ResourceMonitor.ChartRange.Last7d then
+    set $Minutes = 10080;
+  end if;
+  if $Range = ResourceMonitor.ChartRange.Last14d then
+    set $Minutes = 20160;
+  end if;
+  return $Minutes;
+end;
+
+grant execute on microflow ResourceMonitor.SUB_RangeMinutes to ResourceMonitor.Admin;
+
+/**
+ * Shows the From/To period the user entered. Up to 24 hours is one point per minute.
+ */
+create or modify microflow ResourceMonitor.ACT_ApplyCustomRange (
+  $Snapshot: ResourceMonitor.Snapshot
+)
+returns Boolean as $Done
+begin
+  change $Snapshot (Range = ResourceMonitor.ChartRange.Custom);
+  $Loaded = call microflow ResourceMonitor.SUB_LoadHistory(Snapshot = $Snapshot);
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.ACT_ApplyCustomRange to ResourceMonitor.Admin;
+
+/**
+ * Switches the dashboard to another time range and reloads the charts.
+ */
+create or modify microflow ResourceMonitor.ACT_SetRange (
+  $Snapshot: ResourceMonitor.Snapshot,
+  $Range: enum ResourceMonitor.ChartRange
+)
+returns Boolean as $Done
+begin
+  change $Snapshot (Range = $Range);
+  $Loaded = call microflow ResourceMonitor.SUB_LoadHistory(Snapshot = $Snapshot);
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.ACT_SetRange to ResourceMonitor.Admin;
+
+/**
+ * Runs every minute from the scheduled event: stores one sample (numbers only, no thread or pool lists) and applies the retention period.
+ */
+create or modify microflow ResourceMonitor.SE_CollectPoint ()
+returns Boolean as $Collected
+begin
+  @anchor(false: (from: right), true: (from: bottom))
+  if @ResourceMonitor.CollectionEnabled then
+    @position(530, 300)
+    $Snapshot = call microflow ResourceMonitor.SUB_CaptureSnapshot(IncludeDetails = false);
+    $Recorded = call java action ResourceMonitor.JA_RecordPoint(Snapshot = $Snapshot, RetentionDays = @ResourceMonitor.RetentionDays);
+    return true;
+  else
+    @position(530, 200)
+    return false;
+  end if;
+end;
+
+grant execute on microflow ResourceMonitor.SE_CollectPoint to ResourceMonitor.Admin;
+
+/**
+ * Data source of the history admin page.
+ */
+create or modify microflow ResourceMonitor.DS_HistoryStatus ()
+returns ResourceMonitor.HistoryStatus as $Status
+begin
+  $Status = create ResourceMonitor.HistoryStatus (RetentionDays = @ResourceMonitor.RetentionDays, CollectionEnabled = @ResourceMonitor.CollectionEnabled);
+  $Filled = call java action ResourceMonitor.JA_HistoryStatus(Status = $Status);
+  return $Status;
+end;
+
+grant execute on microflow ResourceMonitor.DS_HistoryStatus to ResourceMonitor.Admin;
+
+/**
+ * Stores one sample right now, in addition to the scheduled one.
+ */
+create or modify microflow ResourceMonitor.ACT_CollectNow (
+  $Status: ResourceMonitor.HistoryStatus
+)
+returns Boolean as $Done
+begin
+  $Snapshot = call microflow ResourceMonitor.SUB_CaptureSnapshot(IncludeDetails = false);
+  $Recorded = call java action ResourceMonitor.JA_RecordPoint(Snapshot = $Snapshot, RetentionDays = @ResourceMonitor.RetentionDays);
+  $Filled = call java action ResourceMonitor.JA_HistoryStatus(Status = $Status);
+  change $Status (Message = 'Stored one sample.');
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.ACT_CollectNow to ResourceMonitor.Admin;
+
+/**
+ * Fills the retention period with synthetic per-minute history so the charts can be tried. Replaces earlier demo samples.
+ */
+create or modify microflow ResourceMonitor.ACT_GenerateDemoHistory (
+  $Status: ResourceMonitor.HistoryStatus
+)
+returns Boolean as $Done
+begin
+  $Created = call java action ResourceMonitor.JA_GenerateDemoHistory(Days = @ResourceMonitor.RetentionDays);
+  $Filled = call java action ResourceMonitor.JA_HistoryStatus(Status = $Status);
+  change $Status (Message = 'Created ' + toString($Created) + ' demo samples, flagged as demo data.');
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.ACT_GenerateDemoHistory to ResourceMonitor.Admin;
+
+/**
+ * Removes the synthetic samples and keeps the real ones.
+ */
+create or modify microflow ResourceMonitor.ACT_DeleteDemoHistory (
+  $Status: ResourceMonitor.HistoryStatus
+)
+returns Boolean as $Done
+begin
+  $Deleted = call java action ResourceMonitor.JA_DeleteHistory(DemoOnly = true);
+  $Filled = call java action ResourceMonitor.JA_HistoryStatus(Status = $Status);
+  change $Status (Message = 'Deleted ' + toString($Deleted) + ' demo samples.');
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.ACT_DeleteDemoHistory to ResourceMonitor.Admin;
+
+/**
+ * Removes all stored history, real and demo.
+ */
+create or modify microflow ResourceMonitor.ACT_DeleteAllHistory (
+  $Status: ResourceMonitor.HistoryStatus
+)
+returns Boolean as $Done
+begin
+  $Deleted = call java action ResourceMonitor.JA_DeleteHistory(DemoOnly = false);
+  $Filled = call java action ResourceMonitor.JA_HistoryStatus(Status = $Status);
+  change $Status (Message = 'Deleted ' + toString($Deleted) + ' samples.');
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.ACT_DeleteAllHistory to ResourceMonitor.Admin;
+
+/**
+ * Public API. Captures a fresh snapshot of runtime, JVM, OS/CPU, memory, threads, GC, session count and database information.
+ * With IncludeDetails the snapshot also lists threads (with stack traces), memory pools and garbage collectors.
+ * Call it from your own microflows, e.g. a scheduled event, and read the returned Snapshot and its child lists.
+ */
+create or modify microflow ResourceMonitor.SUB_CaptureSnapshot (
+  $IncludeDetails: Boolean
+)
+returns ResourceMonitor.Snapshot as $Snapshot
+begin
+  $Snapshot = create ResourceMonitor.Snapshot;
+  $Captured = call java action ResourceMonitor.JA_Capture(Snapshot = $Snapshot, IncludeDetails = $IncludeDetails);
+  return $Snapshot;
+end;
+
+grant execute on microflow ResourceMonitor.SUB_CaptureSnapshot to ResourceMonitor.Admin;
+
+/**
+ * Rebuilds the snapshot's chart points for the period it has selected: a preset range ending now (up to 720 points), or the custom From/To period (up to 1440 points, so up to 24 hours is one point per minute).
+ */
+create or modify microflow ResourceMonitor.SUB_LoadHistory (
+  $Snapshot: ResourceMonitor.Snapshot
+)
+returns Boolean as $Done
+begin
+  declare $To DateTime = [%CurrentDateTime%];
+  declare $From DateTime = [%CurrentDateTime%];
+  declare $Max Integer = 720;
+  if $Snapshot/CustomFrom = empty or $Snapshot/CustomTo = empty then
+    change $Snapshot (CustomTo = $To, CustomFrom = addMinutes($To, -60));
+  end if;
+  if $Snapshot/Range = ResourceMonitor.ChartRange.Custom then
+    set $From = $Snapshot/CustomFrom;
+    set $To = $Snapshot/CustomTo;
+    set $Max = 1440;
+  else
+    $Minutes = call microflow ResourceMonitor.SUB_RangeMinutes(Range = $Snapshot/Range);
+    set $From = addMinutes($To, 0 - $Minutes);
+  end if;
+  if $To <= $From then
+    set $To = addMinutes($From, 1);
+  end if;
+  $Loaded = call java action ResourceMonitor.JA_LoadHistory(Snapshot = $Snapshot, FromTime = $From, ToTime = $To, MaxBuckets = $Max);
+  return true;
+end;
+
+grant execute on microflow ResourceMonitor.SUB_LoadHistory to ResourceMonitor.Admin;
+-- History and Dashboard link to each other: a stub lets the first one resolve, the full definition below replaces it.
+create or modify page ResourceMonitor.Dashboard (Title: 'Resource Monitor', Layout: Atlas_Core.Atlas_Default) {};
+
+/**
+ * History store: what is kept, a manual collection, and demo data for trying the charts.
+ */
+create or modify page ResourceMonitor.History (Title: 'Resource Monitor history', Layout: Atlas_Core.Atlas_Default) {
+  layoutgrid gridRoot {
+    row {
+      column (DesktopWidth: AutoFill) {
+        dataview dvStatus (DataSource: microflow ResourceMonitor.DS_HistoryStatus, ReadOnlyStyle: Control) {
+          -- Context: $currentObject (ResourceMonitor.HistoryStatus)
+          dynamictext txtTitle (Content: 'History', RenderMode: H2)
+          dynamictext txtExplain (
+            Content: 'The collector stores one sample per minute. Samples older than the retention period are deleted automatically. Demo data is synthetic, flagged, and only for trying the charts.'
+          )
+          layoutgrid gridStatus {
+            row {
+              column (DesktopWidth: 4) {
+                textbox tbTotal (Label: 'Samples stored', Attribute: TotalPoints, Editable: Never)
+                textbox tbDemo (Label: 'Of which demo samples', Attribute: DemoPoints, Editable: Never)
+              }
+              column (DesktopWidth: 4) {
+                datepicker dpOldest (
+                  Label: 'Oldest sample',
+                  Attribute: OldestPoint,
+                  DateFormat: DateTime,
+                  Editable: Never
+                )
+                datepicker dpNewest (
+                  Label: 'Newest sample',
+                  Attribute: NewestPoint,
+                  DateFormat: DateTime,
+                  Editable: Never
+                )
+              }
+              column (DesktopWidth: 4) {
+                textbox tbRetention (
+                  Label: 'Retention (days), constant ResourceMonitor.RetentionDays',
+                  Attribute: RetentionDays,
+                  Editable: Never
+                )
+                checkbox cbEnabled (
+                  Label: 'Collection enabled, constant ResourceMonitor.CollectionEnabled',
+                  Attribute: CollectionEnabled,
+                  Editable: Never
+                )
+              }
+            }
+          }
+          dynamictext txtMessage (Content: '{1}', ContentParams: ({1} = Message))
+          container ctnButtons {
+            actionbutton btnCollect (
+              Caption: 'Store a sample now',
+              Action: call microflow ResourceMonitor.ACT_CollectNow(Status = $currentObject)
+            )
+            actionbutton btnDemo (
+              Caption: 'Generate demo history',
+              Action: call microflow ResourceMonitor.ACT_GenerateDemoHistory(Status = $currentObject),
+              ButtonStyle: Primary
+            )
+            actionbutton btnDelDemo (
+              Caption: 'Delete demo history',
+              Action: call microflow ResourceMonitor.ACT_DeleteDemoHistory(Status = $currentObject)
+            )
+            actionbutton btnDelAll (
+              Caption: 'Delete all history',
+              Action: call microflow ResourceMonitor.ACT_DeleteAllHistory(Status = $currentObject),
+              ButtonStyle: Danger
+            )
+            actionbutton btnBack (Caption: 'Back to dashboard', Action: show page ResourceMonitor.Dashboard)
+          }
+        }
+      }
+    }
+  }
+};
+
+grant view on page ResourceMonitor.History to ResourceMonitor.Admin;
+
+/**
+ * Popup showing one thread's state, lock information and stack trace.
+ */
+create or modify page ResourceMonitor.ThreadSample_Detail (
+  Title: 'Thread',
+  Layout: Atlas_Core.PopupLayout,
+  Params: ( $ThreadSample: ResourceMonitor.ThreadSample )
+) {
+  dataview dvThread (DataSource: $ThreadSample, ReadOnlyStyle: Control) {
+    -- Context: $currentObject (ResourceMonitor.ThreadSample)
+    textbox tbName (Label: 'Name', Attribute: Name, Editable: Never)
+    layoutgrid gridThread {
+      row {
+        column (DesktopWidth: 4) {
+          textbox tbId (Label: 'Thread id', Attribute: ThreadId, Editable: Never)
+          textbox tbState (Label: 'State', Attribute: State, Editable: Never)
+          checkbox cbDaemon (Label: 'Daemon', Attribute: IsDaemon, Editable: Never)
+        }
+        column (DesktopWidth: 4) {
+          textbox tbPrio (Label: 'Priority', Attribute: Priority, Editable: Never)
+          textbox tbCpu (Label: 'CPU time (ms)', Attribute: CpuTimeMs, Editable: Never)
+        }
+        column (DesktopWidth: 4) {
+          textbox tbBlocked (Label: 'Times blocked', Attribute: BlockedCount, Editable: Never)
+          textbox tbWaited (Label: 'Times waited', Attribute: WaitedCount, Editable: Never)
+        }
+      }
+    }
+    textbox tbLock (Label: 'Blocked on lock', Attribute: BlockedOnLock, Editable: Never)
+    textbox tbOwner (Label: 'Lock owner', Attribute: LockOwnerName, Editable: Never)
+    textarea taStack (Label: 'Stack trace', Attribute: StackTrace, Editable: Never)
+    footer {
+      actionbutton btnClose (Caption: 'Close', Action: close page)
+    }
+  }
+};
+
+grant view on page ResourceMonitor.ThreadSample_Detail to ResourceMonitor.Admin;
+
+/** */
+create or replace page ResourceMonitor.Dashboard (Title: 'Resource Monitor', Layout: Atlas_Core.Atlas_Default) {
+  layoutgrid gridRoot {
+    row {
+      column (DesktopWidth: AutoFill) {
+        dataview dvSnapshot (DataSource: microflow ResourceMonitor.DS_Snapshot, ReadOnlyStyle: Control) {
+          -- Context: $currentObject (ResourceMonitor.Snapshot)
+          layoutgrid gridHeader {
+            row {
+              column (DesktopWidth: 8) {
+                dynamictext txtTitle (Content: 'Resource Monitor', RenderMode: H2)
+                dynamictext txtCaptured (
+                  Content: 'Captured {1} in {2} ms. Values are a point in time; press Refresh to capture again. History is stored every minute.',
+                  ContentParams: ({1} = CapturedAt, {2} = CaptureDurationMs),
+                  Class: 'rm-hint'
+                )
+              }
+              column (DesktopWidth: 4) {
+                container ctnRefresh (Class: 'rm-right') {
+                  actionbutton btnRefresh (
+                    Caption: 'Refresh',
+                    Action: call microflow ResourceMonitor.ACT_Refresh(Snapshot = $currentObject),
+                    ButtonStyle: Primary,
+                    Icon: 'Atlas_Core.Atlas_Filled.refresh'
+                  )
+                }
+              }
+            }
+          }
+          tabcontainer tabs {
+            tabpage tabCharts (Caption: 'Overview') {
+              layoutgrid gridKpi1 {
+                row {
+                  column (DesktopWidth: 4) {
+                    container k1 (
+                      Class: 'rm-card rm-kpi',
+                      DynamicClasses: if $currentObject/ProcessCpuLoadPercent >= 90 then 'rm-bad' else if $currentObject/ProcessCpuLoadPercent >= 70 then 'rm-warn' else 'rm-ok'
+                    ) {
+                      container kh2 (Class: 'rm-kpi-head') {
+                        dynamictext kl3 (Content: 'Process CPU', Class: 'rm-kpi-label')
+                        tooltip tt4 (
+                          renderMethod: 'text',
+                          textMessage: 'Share of the machine CPU used by the Mendix process. Why it matters: separates your app load from other software on the same host. Watch for: sustained above 80 percent means a busy microflow, scheduled event or loop. Source: OperatingSystemMXBean.getProcessCpuLoad',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt4i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      dynamictext kv5 (
+                        Content: '{1} %',
+                        ContentParams: ({1} = ProcessCpuLoadPercent),
+                        Class: 'rm-kpi-value'
+                      )
+                      dynamictext kt6 (
+                        Content: 'System CPU {1} %',
+                        ContentParams: ({1} = SystemCpuLoadPercent),
+                        Class: 'rm-hint'
+                      )
+                      progressbar pb7 (
+                        type: 'expression',
+                        staticCurrentValue: 50,
+                        expressionCurrentValue: '$currentObject/ProcessCpuLoadPercent',
+                        staticMinValue: 0,
+                        expressionMinValue: '0',
+                        staticMaxValue: 100,
+                        expressionMaxValue: '100',
+                        showLabel: false,
+                        labelType: 'text'
+                      )
+                    }
+                  }
+                  column (DesktopWidth: 4) {
+                    container k8 (
+                      Class: 'rm-card rm-kpi',
+                      DynamicClasses: if $currentObject/HeapUsedMb * 100 div $currentObject/HeapMaxMb >= 90 then 'rm-bad' else if $currentObject/HeapUsedMb * 100 div $currentObject/HeapMaxMb >= 75 then 'rm-warn' else 'rm-ok'
+                    ) {
+                      container kh9 (Class: 'rm-kpi-head') {
+                        dynamictext kl10 (Content: 'Heap used', Class: 'rm-kpi-label')
+                        tooltip tt11 (
+                          renderMethod: 'text',
+                          textMessage: 'Memory holding Java objects, including garbage not collected yet. Why it matters: the main memory leak detector. Watch for: used memory that keeps climbing after each garbage collection, or sits near the maximum (OutOfMemoryError risk). Source: MemoryMXBean heap usage',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt11i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      dynamictext kv12 (Content: '{1} MB', ContentParams: ({1} = HeapUsedMb), Class: 'rm-kpi-value')
+                      dynamictext kt13 (
+                        Content: 'of {1} MB maximum',
+                        ContentParams: ({1} = HeapMaxMb),
+                        Class: 'rm-hint'
+                      )
+                      progressbar pb14 (
+                        type: 'expression',
+                        staticCurrentValue: 50,
+                        expressionCurrentValue: '$currentObject/HeapUsedMb * 100 div $currentObject/HeapMaxMb',
+                        staticMinValue: 0,
+                        expressionMinValue: '0',
+                        staticMaxValue: 100,
+                        expressionMaxValue: '100',
+                        showLabel: false,
+                        labelType: 'text'
+                      )
+                    }
+                  }
+                  column (DesktopWidth: 4) {
+                    container k15 (
+                      Class: 'rm-card rm-kpi',
+                      DynamicClasses: if $currentObject/DbPoolActive * 100 div $currentObject/DbPoolMaxTotal >= 90 then 'rm-bad' else if $currentObject/DbPoolActive * 100 div $currentObject/DbPoolMaxTotal >= 70 then 'rm-warn' else 'rm-ok'
+                    ) {
+                      container kh16 (Class: 'rm-kpi-head') {
+                        dynamictext kl17 (Content: 'DB connections', Class: 'rm-kpi-label')
+                        tooltip tt18 (
+                          renderMethod: 'text',
+                          textMessage: 'Database connections in use out of the pool size. Why it matters: every request needs a connection and waits when all are busy. Watch for: active at the maximum with waiters above 0 is the classic cause of a slow app. Source: commons-pool2 GenericObjectPool NumActive and MaxTotal',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt18i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      dynamictext kv19 (
+                        Content: '{1} of {2}',
+                        ContentParams: ({1} = DbPoolActive, {2} = DbPoolMaxTotal),
+                        Class: 'rm-kpi-value'
+                      )
+                      dynamictext kt20 (
+                        Content: '{1} waiting for a connection',
+                        ContentParams: ({1} = DbPoolWaiters),
+                        Class: 'rm-hint'
+                      )
+                      progressbar pb21 (
+                        type: 'expression',
+                        staticCurrentValue: 50,
+                        expressionCurrentValue: '$currentObject/DbPoolActive * 100 div $currentObject/DbPoolMaxTotal',
+                        staticMinValue: 0,
+                        expressionMinValue: '0',
+                        staticMaxValue: 100,
+                        expressionMaxValue: '100',
+                        showLabel: false,
+                        labelType: 'text'
+                      )
+                    }
+                  }
+                }
+              }
+              layoutgrid gridKpi2 {
+                row {
+                  column (DesktopWidth: 4) {
+                    container k22 (
+                      Class: 'rm-card rm-kpi',
+                      DynamicClasses: if $currentObject/WebQueueSize > 0 then 'rm-bad' else 'rm-ok'
+                    ) {
+                      container kh23 (Class: 'rm-kpi-head') {
+                        dynamictext kl24 (Content: 'Web request queue', Class: 'rm-kpi-label')
+                        tooltip tt25 (
+                          renderMethod: 'text',
+                          textMessage: 'Requests accepted but waiting for a free web server thread. Why it matters: the queue only fills when every thread is busy, so it is a clear saturation signal. Watch for: any value above 0 that lasts. Source: com.mendix:type=JettyThreadPool QueueSize',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt25i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      dynamictext kv26 (Content: '{1}', ContentParams: ({1} = WebQueueSize), Class: 'rm-kpi-value')
+                      dynamictext kt27 (Content: 'requests waiting for a web thread', Class: 'rm-hint')
+                    }
+                  }
+                  column (DesktopWidth: 4) {
+                    container k28 (Class: 'rm-card rm-kpi', DynamicClasses: 'rm-ok') {
+                      container kh29 (Class: 'rm-kpi-head') {
+                        dynamictext kl30 (Content: 'Active sessions', Class: 'rm-kpi-label')
+                        tooltip tt31 (
+                          renderMethod: 'text',
+                          textMessage: 'User sessions currently held in memory, signed in and anonymous. Why it matters: each session uses heap, so this relates load to the number of users. Watch for: sessions that never expire, or sudden growth from bots. Source: Core.getActiveSessions',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt31i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      dynamictext kv32 (Content: '{1}', ContentParams: ({1} = ActiveSessions), Class: 'rm-kpi-value')
+                      dynamictext kt33 (Content: 'signed-in and anonymous', Class: 'rm-hint')
+                    }
+                  }
+                  column (DesktopWidth: 4) {
+                    container k34 (
+                      Class: 'rm-card rm-kpi',
+                      DynamicClasses: if $currentObject/DeadlockedThreadCount > 0 then 'rm-bad' else 'rm-ok'
+                    ) {
+                      container kh35 (Class: 'rm-kpi-head') {
+                        dynamictext kl36 (Content: 'Deadlocked threads', Class: 'rm-kpi-label')
+                        tooltip tt37 (
+                          renderMethod: 'text',
+                          textMessage: 'Threads waiting forever on locks held by each other. Why it matters: a deadlock freezes the affected users until a restart. Watch for: must be 0; if not, open the Threads tab. Source: ThreadMXBean.findDeadlockedThreads',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt37i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      dynamictext kv38 (
+                        Content: '{1}',
+                        ContentParams: ({1} = DeadlockedThreadCount),
+                        Class: 'rm-kpi-value'
+                      )
+                      dynamictext kt39 (Content: '0 is healthy; see the Threads tab', Class: 'rm-hint')
+                    }
+                  }
+                }
+              }
+              container ctnRange (Class: 'rm-card rm-range') {
+                container ctnRangeButtons (Class: 'rm-range-buttons') {
+                  actionbutton b40 (
+                    Caption: '1 hour',
+                    Action: call microflow ResourceMonitor.ACT_SetRange(Snapshot = $currentObject, Range = ResourceMonitor.ChartRange.Last1h),
+                    DynamicClasses: if $currentObject/Range = ResourceMonitor.ChartRange.Last1h then 'rm-active' else ''
+                  )
+                  actionbutton b41 (
+                    Caption: '6 hours',
+                    Action: call microflow ResourceMonitor.ACT_SetRange(Snapshot = $currentObject, Range = ResourceMonitor.ChartRange.Last6h),
+                    DynamicClasses: if $currentObject/Range = ResourceMonitor.ChartRange.Last6h then 'rm-active' else ''
+                  )
+                  actionbutton b42 (
+                    Caption: '24 hours',
+                    Action: call microflow ResourceMonitor.ACT_SetRange(Snapshot = $currentObject, Range = ResourceMonitor.ChartRange.Last24h),
+                    DynamicClasses: if $currentObject/Range = ResourceMonitor.ChartRange.Last24h then 'rm-active' else ''
+                  )
+                  actionbutton b43 (
+                    Caption: '3 days',
+                    Action: call microflow ResourceMonitor.ACT_SetRange(Snapshot = $currentObject, Range = ResourceMonitor.ChartRange.Last3d),
+                    DynamicClasses: if $currentObject/Range = ResourceMonitor.ChartRange.Last3d then 'rm-active' else ''
+                  )
+                  actionbutton b44 (
+                    Caption: '7 days',
+                    Action: call microflow ResourceMonitor.ACT_SetRange(Snapshot = $currentObject, Range = ResourceMonitor.ChartRange.Last7d),
+                    DynamicClasses: if $currentObject/Range = ResourceMonitor.ChartRange.Last7d then 'rm-active' else ''
+                  )
+                  actionbutton b45 (
+                    Caption: '14 days',
+                    Action: call microflow ResourceMonitor.ACT_SetRange(Snapshot = $currentObject, Range = ResourceMonitor.ChartRange.Last14d),
+                    DynamicClasses: if $currentObject/Range = ResourceMonitor.ChartRange.Last14d then 'rm-active' else ''
+                  )
+                }
+                layoutgrid gridCustom {
+                  row {
+                    column (DesktopWidth: 3) {
+                      datepicker dpFrom (Label: 'From', Attribute: CustomFrom, DateFormat: DateTime)
+                    }
+                    column (DesktopWidth: 3) {
+                      datepicker dpTo (Label: 'To', Attribute: CustomTo, DateFormat: DateTime)
+                    }
+                    column (DesktopWidth: 6) {
+                      container ctnApply (Class: 'rm-right rm-apply') {
+                        actionbutton btnApply (
+                          Caption: 'Show this period',
+                          Action: call microflow ResourceMonitor.ACT_ApplyCustomRange(Snapshot = $currentObject),
+                          ButtonStyle: Primary
+                        )
+                      }
+                    }
+                  }
+                }
+                dynamictext txtRange (
+                  Content: 'Showing {1}. {2} A period of up to 24 hours shows one point per minute.',
+                  ContentParams: ({1} = Range, {2} = HistoryNote),
+                  Class: 'rm-hint'
+                )
+                linkbutton lnkHistory (
+                  Caption: 'History settings and demo data',
+                  Action: show page ResourceMonitor.History
+                )
+              }
+              layoutgrid gridCharts {
+                row {
+                  column (DesktopWidth: 6) {
+                    container c48 (Class: 'rm-card') {
+                      container h49 (Class: 'rm-card-head') {
+                        dynamictext t50 (Content: 'CPU', RenderMode: H5)
+                        tooltip tt51 (
+                          renderMethod: 'text',
+                          textMessage: 'Process CPU is the Mendix process; System CPU is the whole machine. If system is high but process is low, another program is competing for CPU. Source: OperatingSystemMXBean getProcessCpuLoad and getCpuLoad',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt51i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      timeseries ts52 (
+                        enableAdvancedOptions: false,
+                        showPlaygroundSlot: false,
+                        yAxisLabel: '%',
+                        showLegend: true,
+                        showRangeSlider: false,
+                        gridLines: 'horizontal',
+                        widthUnit: 'percentage',
+                        width: 100,
+                        heightUnit: 'pixels',
+                        height: 250,
+                        enableThemeConfig: false,
+                        yAxisRangeMode: 'tozero'
+                      ) {
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Process CPU (avg)',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: ProcessCpuAvg,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#264AE5',
+                          enableFillArea: 'true'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'System CPU (avg)',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: SystemCpuAvg,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#6C7180',
+                          enableFillArea: 'false'
+                        )
+                      }
+                    }
+                  }
+                  column (DesktopWidth: 6) {
+                    container c57 (Class: 'rm-card') {
+                      container h58 (Class: 'rm-card-head') {
+                        dynamictext t59 (Content: 'Memory (heap)', RenderMode: H5)
+                        tooltip tt60 (
+                          renderMethod: 'text',
+                          textMessage: 'Heap used is the line to watch: a healthy heap is a sawtooth that falls after each garbage collection, and a rising floor means a leak. Heap committed is what the JVM has reserved; non-heap holds classes and compiled code; the red dashed line is the heap maximum (Xmx). Source: MemoryMXBean',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt60i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      timeseries ts61 (
+                        enableAdvancedOptions: false,
+                        showPlaygroundSlot: false,
+                        yAxisLabel: 'MB',
+                        showLegend: true,
+                        showRangeSlider: false,
+                        gridLines: 'horizontal',
+                        widthUnit: 'percentage',
+                        width: 100,
+                        heightUnit: 'pixels',
+                        height: 250,
+                        enableThemeConfig: false,
+                        yAxisRangeMode: 'tozero'
+                      ) {
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Heap used',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: HeapUsedMb,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#264AE5',
+                          enableFillArea: 'true'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Heap committed',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: HeapCommittedMb,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#6C7180',
+                          enableFillArea: 'false'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Non-heap used',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: NonHeapUsedMb,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#8A3FFC',
+                          enableFillArea: 'false'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Heap max (Xmx)',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: HeapMaxMb,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#E33F4E',
+                          enableFillArea: 'false',
+                          customSeriesOptions: '{"line":{"dash":"dash","width":1.5}}'
+                        )
+                      }
+                    }
+                  }
+                }
+                row {
+                  column (DesktopWidth: 6) {
+                    container c66 (Class: 'rm-card') {
+                      container h67 (Class: 'rm-card-head') {
+                        dynamictext t68 (Content: 'Database connections', RenderMode: H5)
+                        tooltip tt69 (
+                          renderMethod: 'text',
+                          textMessage: 'Active connections run queries now; idle ones are open and ready; waiters are requests waiting for a connection (peak per point). The red dashed line is the pool size. Waiters above 0 mean the pool is exhausted. Source: commons-pool2 GenericObjectPool',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt69i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      timeseries ts70 (
+                        enableAdvancedOptions: false,
+                        showPlaygroundSlot: false,
+                        yAxisLabel: 'connections',
+                        showLegend: true,
+                        showRangeSlider: false,
+                        gridLines: 'horizontal',
+                        widthUnit: 'percentage',
+                        width: 100,
+                        heightUnit: 'pixels',
+                        height: 250,
+                        enableThemeConfig: false,
+                        yAxisRangeMode: 'tozero'
+                      ) {
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Active',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: PoolActive,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#264AE5',
+                          enableFillArea: 'true'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Idle',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: PoolIdle,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#3CB33D',
+                          enableFillArea: 'false'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Waiters (peak)',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: PoolWaiters,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#F99B1D',
+                          enableFillArea: 'false'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Pool size',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: PoolMaxConnections,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#E33F4E',
+                          enableFillArea: 'false',
+                          customSeriesOptions: '{"line":{"dash":"dash","width":1.5}}'
+                        )
+                      }
+                    }
+                  }
+                  column (DesktopWidth: 6) {
+                    container c74 (Class: 'rm-card') {
+                      container h75 (Class: 'rm-card-head') {
+                        dynamictext t76 (Content: 'Web server threads', RenderMode: H5)
+                        tooltip tt77 (
+                          renderMethod: 'text',
+                          textMessage: 'Busy threads are handling a request; queued requests wait for a thread (peak per point). The red dashed line is the maximum number of web threads. Source: com.mendix:type=JettyThreadPool',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt77i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      timeseries ts78 (
+                        enableAdvancedOptions: false,
+                        showPlaygroundSlot: false,
+                        yAxisLabel: 'threads',
+                        showLegend: true,
+                        showRangeSlider: false,
+                        gridLines: 'horizontal',
+                        widthUnit: 'percentage',
+                        width: 100,
+                        heightUnit: 'pixels',
+                        height: 250,
+                        enableThemeConfig: false,
+                        yAxisRangeMode: 'tozero'
+                      ) {
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Busy threads',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: WebBusyThreads,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#264AE5',
+                          enableFillArea: 'true'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Queued requests (peak)',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: WebQueue,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#F99B1D',
+                          enableFillArea: 'false'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Max threads',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: WebMaxThreads,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#E33F4E',
+                          enableFillArea: 'false',
+                          customSeriesOptions: '{"line":{"dash":"dash","width":1.5}}'
+                        )
+                      }
+                    }
+                  }
+                }
+                row {
+                  column (DesktopWidth: 6) {
+                    container c81 (Class: 'rm-card') {
+                      container h82 (Class: 'rm-card-head') {
+                        dynamictext t83 (Content: 'Database activity per minute', RenderMode: H5)
+                        tooltip tt84 (
+                          renderMethod: 'text',
+                          textMessage: 'Database SELECT and UPDATE statements run by the Mendix runtime per minute. A jump without more users usually means a retrieve inside a loop; steady high updates with few users points to a scheduled event or sync. Source: com.mendix:type=DataStorage Selects and Updates, counter converted to a rate',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt84i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      timeseries ts85 (
+                        enableAdvancedOptions: false,
+                        showPlaygroundSlot: false,
+                        yAxisLabel: 'per minute',
+                        showLegend: true,
+                        showRangeSlider: false,
+                        gridLines: 'horizontal',
+                        widthUnit: 'percentage',
+                        width: 100,
+                        heightUnit: 'pixels',
+                        height: 250,
+                        enableThemeConfig: false,
+                        yAxisRangeMode: 'tozero'
+                      ) {
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Selects',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: SelectsPerMin,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#264AE5',
+                          enableFillArea: 'true'
+                        )
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Updates',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: UpdatesPerMin,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#F99B1D',
+                          enableFillArea: 'false'
+                        )
+                      }
+                    }
+                  }
+                  column (DesktopWidth: 6) {
+                    container c87 (Class: 'rm-card') {
+                      container h88 (Class: 'rm-card-head') {
+                        dynamictext t89 (Content: 'Sessions', RenderMode: H5)
+                        tooltip tt90 (
+                          renderMethod: 'text',
+                          textMessage: 'Sessions held in memory over time. Compare with the CPU and memory charts to see how much load comes from users. Source: Core.getActiveSessions',
+                          tooltipPosition: 'bottom',
+                          arrowPosition: 'none',
+                          openOn: 'hoverFocus'
+                        ) {
+                          trigger {
+                            dynamictext tt90i (Content: 'i', Class: 'rm-info')
+                          }
+                        }
+                      }
+                      timeseries ts91 (
+                        enableAdvancedOptions: false,
+                        showPlaygroundSlot: false,
+                        yAxisLabel: 'sessions',
+                        showLegend: true,
+                        showRangeSlider: false,
+                        gridLines: 'horizontal',
+                        widthUnit: 'percentage',
+                        width: 100,
+                        heightUnit: 'pixels',
+                        height: 250,
+                        enableThemeConfig: false,
+                        yAxisRangeMode: 'tozero'
+                      ) {
+                        line (
+                          DataSource: $currentObject/ResourceMonitor.Snapshot_ChartPoint,
+                          dataSet: 'static',
+                          staticName: 'Active sessions',
+                          staticXAttribute: Timestamp,
+                          staticYAttribute: Sessions,
+                          aggregationType: 'none',
+                          interpolation: 'linear',
+                          lineStyle: 'custom',
+                          lineColor: '#264AE5',
+                          enableFillArea: 'true'
+                        )
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            tabpage tabThreads (Caption: 'Threads') {
+              container ctnThreads (Class: 'rm-card') {
+                container ctnThreadsHead (Class: 'rm-card-head') {
+                  dynamictext txtThreadsTitle (Content: 'Threads', RenderMode: H5)
+                  tooltip tt92 (
+                    renderMethod: 'text',
+                    textMessage: 'Every JVM thread at the moment of capture. BLOCKED threads wait for a lock; many threads with the same top frame show the contention point. Open Stack for the full stack trace. Source: ThreadMXBean.dumpAllThreads',
+                    tooltipPosition: 'bottom',
+                    arrowPosition: 'none',
+                    openOn: 'hoverFocus'
+                  ) {
+                    trigger {
+                      dynamictext tt92i (Content: 'i', Class: 'rm-info')
+                    }
+                  }
+                  dynamictext txtThreadsSub (
+                    Content: '{1} threads, {2} deadlocked',
+                    ContentParams: ({1} = ThreadCount, {2} = DeadlockedThreadCount),
+                    Class: 'rm-hint'
+                  )
+                }
+                textarea taDead (
+                  Label: 'Deadlocked threads',
+                  Attribute: DeadlockedThreads,
+                  Editable: Never,
+                  Visible: $currentObject/DeadlockedThreadCount > 0
+                )
+                datagrid gridThreads (
+                  DataSource: $currentObject/ResourceMonitor.Snapshot_ThreadSample,
+                  PageSize: 10,
+                  PagingPosition: both
+                ) {
+                  -- Context: $currentObject (ResourceMonitor.ThreadSample), $gridThreads (selection)
+                  column (Attribute: Name, Caption: 'Name') {
+                    textfilter tfThreadName
+                  }
+                  column (Attribute: State, Caption: 'State') {
+                    textfilter tfThreadState
+                  }
+                  column (Attribute: CpuTimeMs, Caption: 'CPU time (ms)') {
+                    numberfilter nfCpu (FilterType: equal)
+                  }
+                  column (Attribute: BlockedCount, Caption: 'Times blocked') {
+                    numberfilter nfBlocked (FilterType: equal)
+                  }
+                  column (Attribute: TopFrame, Caption: 'Top frame') {
+                    textfilter tfTop
+                  }
+                  column (Caption: 'Details', ShowContentAs: customContent) {
+                    actionbutton btnStack (
+                      Caption: 'Stack',
+                      Action: show page ResourceMonitor.ThreadSample_Detail(ThreadSample = $currentObject)
+                    )
+                  }
+                }
+              }
+            }
+            tabpage tabMemory (Caption: 'Memory and GC') {
+              container ctnPools (Class: 'rm-card') {
+                container ctnPoolsHead (Class: 'rm-card-head') {
+                  dynamictext txtPools (Content: 'Memory pools', RenderMode: H5)
+                  tooltip tt93 (
+                    renderMethod: 'text',
+                    textMessage: 'The JVM memory areas. Old Gen close to 100 percent after a collection is real memory pressure; Metaspace that keeps growing means a class loader leak. Source: MemoryPoolMXBean',
+                    tooltipPosition: 'bottom',
+                    arrowPosition: 'none',
+                    openOn: 'hoverFocus'
+                  ) {
+                    trigger {
+                      dynamictext tt93i (Content: 'i', Class: 'rm-info')
+                    }
+                  }
+                }
+                datagrid gridPools (DataSource: $currentObject/ResourceMonitor.Snapshot_MemoryPoolSample) {
+                  -- Context: $currentObject (ResourceMonitor.MemoryPoolSample), $gridPools (selection)
+                  column (Attribute: Name, Caption: 'Pool')
+                  column (Attribute: PoolType, Caption: 'Type')
+                  column (Attribute: UsedMb, Caption: 'Used (MB)')
+                  column (Attribute: CommittedMb, Caption: 'Committed (MB)')
+                  column (Attribute: MaxMb, Caption: 'Max (MB)')
+                  column (Attribute: PeakUsedMb, Caption: 'Peak used (MB)')
+                  column (Attribute: UsedPercentOfMax, Caption: 'Used % of max')
+                }
+              }
+              container ctnGc (Class: 'rm-card') {
+                container ctnGcHead (Class: 'rm-card-head') {
+                  dynamictext txtGc (Content: 'Garbage collectors', RenderMode: H5)
+                  tooltip tt94 (
+                    renderMethod: 'text',
+                    textMessage: 'Garbage collectors with how often they ran and how long they paused the application in total. Watch for a long average pause (over 1 second) or GC time above 5 percent of uptime. Source: GarbageCollectorMXBean',
+                    tooltipPosition: 'bottom',
+                    arrowPosition: 'none',
+                    openOn: 'hoverFocus'
+                  ) {
+                    trigger {
+                      dynamictext tt94i (Content: 'i', Class: 'rm-info')
+                    }
+                  }
+                }
+                datagrid gridGc (DataSource: $currentObject/ResourceMonitor.Snapshot_GcSample) {
+                  -- Context: $currentObject (ResourceMonitor.GcSample), $gridGc (selection)
+                  column (Attribute: Name, Caption: 'Collector')
+                  column (Attribute: CollectionCount, Caption: 'Collections')
+                  column (Attribute: CollectionTimeMs, Caption: 'Total time (ms)')
+                  column (Attribute: MemoryPools, Caption: 'Memory pools')
+                }
+              }
+            }
+            tabpage tabEnv (Caption: 'Environment') {
+              layoutgrid gridEnv {
+                row {
+                  column (DesktopWidth: 4) {
+                    groupbox gbRuntime (Caption: 'Runtime') {
+                      textbox tbRtVersion (Label: 'Mendix runtime', Attribute: MendixRuntimeVersion, Editable: Never)
+                      textbox tbJavaVer (Label: 'Java version', Attribute: JavaVersion, Editable: Never)
+                      textbox tbJvm (Label: 'JVM', Attribute: JvmName, Editable: Never)
+                      datepicker dpStarted (
+                        Label: 'JVM started',
+                        Attribute: JvmStartedAt,
+                        DateFormat: DateTime,
+                        Editable: Never
+                      )
+                    }
+                  }
+                  column (DesktopWidth: 4) {
+                    groupbox gbOs (Caption: 'Operating system') {
+                      textbox tbOs (Label: 'OS', Attribute: OsName, Editable: Never)
+                      textbox tbArch (Label: 'Architecture', Attribute: OsArch, Editable: Never)
+                      textbox tbCpus (Label: 'Processors', Attribute: AvailableProcessors, Editable: Never)
+                      textbox tbPhysTotal (
+                        Label: 'Physical memory (MB)',
+                        Attribute: PhysicalMemoryTotalMb,
+                        Editable: Never
+                      )
+                      textbox tbPhysFree (
+                        Label: 'Physical memory free (MB)',
+                        Attribute: PhysicalMemoryFreeMb,
+                        Editable: Never
+                      )
+                      textbox tbDiskFree (Label: 'Disk free (MB)', Attribute: DiskFreeMb, Editable: Never)
+                    }
+                  }
+                  column (DesktopWidth: 4) {
+                    groupbox gbDb (Caption: 'Database') {
+                      textbox tbDbProduct (Label: 'Product', Attribute: DbProductName, Editable: Never)
+                      textbox tbDbVersion (Label: 'Version', Attribute: DbProductVersion, Editable: Never)
+                      textbox tbDbDriver (Label: 'JDBC driver', Attribute: DbDriverName, Editable: Never)
+                      textbox tbDbDriverVer (Label: 'Driver version', Attribute: DbDriverVersion, Editable: Never)
+                      textbox tbDbIso (
+                        Label: 'Transaction isolation',
+                        Attribute: DbTransactionIsolation,
+                        Editable: Never
+                      )
+                      textbox tbDbPing (Label: 'Connection check (ms)', Attribute: DbPingMs, Editable: Never)
+                      textbox tbDbError (
+                        Label: 'Error',
+                        Attribute: DbError,
+                        Editable: Never,
+                        Visible: $currentObject/DbError != empty
+                      )
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
+grant view on page ResourceMonitor.Dashboard to ResourceMonitor.Admin;
+
+create or modify scheduled event ResourceMonitor.SE_CollectPoint (
+  Microflow: ResourceMonitor.SE_CollectPoint,
+  Repeat: Minutely,
+  Multiplier: 1,
+  Enabled: true,
+  OnOverlap: DelayNext,
+  TimeZone: UTC,
+);
+-- legacy (preserved, not authorable): Interval 1 Minute
+
