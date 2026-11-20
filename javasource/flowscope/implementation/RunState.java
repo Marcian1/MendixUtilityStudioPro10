@@ -39,20 +39,17 @@ final class RunState {
     final String rootName;
     final long startTs;
     final boolean ignored;
-    final long heapStartMb;
     private long endTs;
-    private long heapEndMb;
     private final ArrayDeque<String> stack = new ArrayDeque<>();
     private final List<Event> events = new ArrayList<>();
     private final List<SqlCall> sqls = new ArrayList<>();
     private final long createdNano = System.nanoTime();
 
-    RunState(String id, String rootName, long startTs, boolean ignored, long heapStartMb) {
+    RunState(String id, String rootName, long startTs, boolean ignored) {
         this.id = id;
         this.rootName = rootName;
         this.startTs = startTs;
         this.ignored = ignored;
-        this.heapStartMb = heapStartMb;
         this.endTs = startTs;
     }
 
@@ -64,7 +61,7 @@ final class RunState {
     }
 
     /** Returns true when the entry-point microflow itself has finished. */
-    synchronized boolean finishMicroflow(long ts, long heapMb) {
+    synchronized boolean finishMicroflow(long ts) {
         if (stack.isEmpty()) {
             return true;
         }
@@ -74,7 +71,6 @@ final class RunState {
         }
         if (stack.isEmpty()) {
             endTs = ts;
-            heapEndMb = heapMb;
             return true;
         }
         return false;
@@ -113,10 +109,6 @@ final class RunState {
 
     synchronized long endTs() {
         return endTs;
-    }
-
-    synchronized long heapEndMb() {
-        return heapEndMb;
     }
 
     long ageMillis() {

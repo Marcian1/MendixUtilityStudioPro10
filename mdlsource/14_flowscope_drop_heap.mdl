@@ -1,0 +1,7 @@
+mdl 1;
+
+-- Heap start/end/delta were the whole JVM's heap, not the flow's, so they misled. Removed from the grid, the
+-- detail popup, the capture code and the model.
+ALTER ENTITY FlowScope.Execution DROP ATTRIBUTE HeapStartMB;
+ALTER ENTITY FlowScope.Execution DROP ATTRIBUTE HeapEndMB;
+ALTER ENTITY FlowScope.Execution DROP ATTRIBUTE HeapDeltaMB;

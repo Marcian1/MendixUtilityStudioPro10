@@ -1,0 +1,5 @@
+mdl 1;
+
+-- The overview is now a grid with a detail popup, so the row-expand state and its nanoflow are no longer used.
+DROP NANOFLOW FlowScope.NAN_ToggleExpanded;
+ALTER ENTITY FlowScope.Execution DROP ATTRIBUTE IsExpanded;

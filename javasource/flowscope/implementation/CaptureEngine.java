@@ -219,7 +219,7 @@ public final class CaptureEngine {
             if (active.size() >= MAX_ACTIVE) {
                 return;
             }
-            state = new RunState(id, name, ts, !isTarget(name), usedHeapMb());
+            state = new RunState(id, name, ts, !isTarget(name));
             active.put(id, state);
         }
         state.startMicroflow(name, ts);
@@ -230,7 +230,7 @@ public final class CaptureEngine {
         if (state == null) {
             return;
         }
-        if (state.finishMicroflow(ts, usedHeapMb())) {
+        if (state.finishMicroflow(ts)) {
             active.remove(id, state);
             if (state.ignored) {
                 return;
@@ -342,11 +342,6 @@ public final class CaptureEngine {
     }
 
     // ---- helpers ---------------------------------------------------------------------------
-
-    private static long usedHeapMb() {
-        Runtime rt = Runtime.getRuntime();
-        return (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
-    }
 
     private static String hostName() {
         try {

@@ -18,15 +18,9 @@ CREATE OR MODIFY PERSISTENT ENTITY FlowScope.Execution (
   /** Database inserts, updates and deletes of the run, sub-flows included. */
   UpdateCount: Long DEFAULT 0,
   SubflowCount: Integer DEFAULT 0,
-  /** Server heap in MB. Shared by every request, so only a rough hint. */
-  HeapStartMB: Long DEFAULT 0,
-  HeapEndMB: Long DEFAULT 0,
-  HeapDeltaMB: Long DEFAULT 0,
   /** The runtime's id for the request, as in its log prefix. Ties a run to log lines. */
   ExecutionId: String(100),
-  NodeName: String(100),
-  /** Page state only: the row is open. Changed in a nanoflow and never committed. */
-  IsExpanded: Boolean DEFAULT false
+  NodeName: String(100)
 )
 INDEX (StartedAt)
 INDEX (DurationSeconds)

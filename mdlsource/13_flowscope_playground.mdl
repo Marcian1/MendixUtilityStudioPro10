@@ -1,0 +1,164 @@
+mdl 1;
+
+-- Scenarios for trying FlowScope. Each button on the Playground popup runs one flow, so grid filters, sorting,
+-- the detail popup and (later) memory attribution can be checked against known behaviour.
+--   PLAY_Fast        no waiting, stays under the threshold, so it must NOT be captured
+--   PLAY_Slow        one wait of 1.5 s
+--   PLAY_VerySlow    one wait of 6 s, shows as the red badge / sorts to the top by duration
+--   PLAY_Queries     many identical selects (N+1) on a pre-filled table
+--   PLAY_MemoryList  builds a big list of objects in memory, never commits: the memory-heavy case
+--   PLAY_MemoryText  builds a big text in a loop: memory-heavy without any database
+--   PLAY_Nested      three levels of sub-flows
+--   PLAY_All         runs the slow, query, memory and nested scenarios one after another
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_Fast ()
+FOLDER 'Playground'
+BEGIN
+  RETRIEVE $Any FROM FlowScope.SampleItem LIMIT 1;
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_Slow ()
+FOLDER 'Playground'
+BEGIN
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 1500);
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_VerySlow ()
+FOLDER 'Playground'
+BEGIN
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 6000);
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_Queries ()
+FOLDER 'Playground'
+BEGIN
+  $Items = CREATE LIST OF FlowScope.SampleItem;
+  DECLARE $I Integer = 0;
+  WHILE $I < 25
+  BEGIN
+    $New = CREATE FlowScope.SampleItem (Name = 'Play ' + toString($I), Category = 'Play', Quantity = $I, Price = 1);
+    ADD $New TO $Items;
+    SET $I = $I + 1;
+  END WHILE;
+  COMMIT $Items WITH EVENTS;
+  RETRIEVE $All FROM FlowScope.SampleItem WHERE Category = 'Play';
+  LOOP $Item IN $All
+  BEGIN
+    RETRIEVE $Same FROM FlowScope.SampleItem WHERE Name = $Item/Name FIRST;
+    $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 60);
+  END LOOP;
+  DELETE $All;
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_MemoryList ()
+FOLDER 'Playground'
+BEGIN
+  $Items = CREATE LIST OF FlowScope.SampleItem;
+  DECLARE $I Integer = 0;
+  WHILE $I < 60000
+  BEGIN
+    $New = CREATE FlowScope.SampleItem (Name = 'Mem ' + toString($I), Category = 'Mem', Quantity = $I, Price = 1);
+    ADD $New TO $Items;
+    SET $I = $I + 1;
+  END WHILE;
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 1200);
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_MemoryText ()
+FOLDER 'Playground'
+BEGIN
+  DECLARE $Text String = 'x';
+  DECLARE $I Integer = 0;
+  WHILE $I < 18
+  BEGIN
+    SET $Text = $Text + $Text;
+    SET $I = $I + 1;
+  END WHILE;
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 1200);
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_NestedC ()
+FOLDER 'Playground'
+BEGIN
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 400);
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_NestedB ()
+FOLDER 'Playground'
+BEGIN
+  CALL MICROFLOW FlowScope.PLAY_NestedC();
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 300);
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_Nested ()
+FOLDER 'Playground'
+BEGIN
+  CALL MICROFLOW FlowScope.PLAY_NestedB();
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 500);
+END;
+
+CREATE OR MODIFY MICROFLOW FlowScope.PLAY_All ()
+FOLDER 'Playground'
+BEGIN
+  CALL MICROFLOW FlowScope.PLAY_Slow();
+  CALL MICROFLOW FlowScope.PLAY_Queries();
+  CALL MICROFLOW FlowScope.PLAY_MemoryList();
+  CALL MICROFLOW FlowScope.PLAY_MemoryText();
+  CALL MICROFLOW FlowScope.PLAY_Nested();
+END;
+
+CREATE OR MODIFY PAGE FlowScope.Playground (
+  Title: 'Playground',
+  Layout: Atlas_Core.PopupLayout,
+  PopupWidth: 720,
+  PopupHeight: 700
+) {
+  layoutgrid lgP { row { column (DesktopWidth: 12) {
+    dynamictext txtIntro (Content: 'Each button runs one scenario. Slow ones are captured and appear on the overview after a moment.', Class: 'fs-hint')
+    container ctnBtns (Class: 'fs-playground') {
+      container ctnRowFast (Class: 'fs-scn') {
+        actionbutton btnFast (Caption: 'Fast flow', Action: call microflow FlowScope.PLAY_Fast)
+        dynamictext dFast (Content: 'Finishes in a blink. Stays under the threshold, so it is not captured.', Class: 'fs-hint')
+      }
+      container ctnRowSlow (Class: 'fs-scn') {
+        actionbutton btnSlow (Caption: 'Slow flow', Action: call microflow FlowScope.PLAY_Slow)
+        dynamictext dSlow (Content: 'One wait of 1.5 seconds. Shows the amber badge.', Class: 'fs-hint')
+      }
+      container ctnRowVerySlow (Class: 'fs-scn') {
+        actionbutton btnVerySlow (Caption: 'Very slow flow', Action: call microflow FlowScope.PLAY_VerySlow)
+        dynamictext dVerySlow (Content: 'One wait of 6 seconds. Shows the red badge.', Class: 'fs-hint')
+      }
+      container ctnRowQueries (Class: 'fs-scn') {
+        actionbutton btnQueries (Caption: 'Many queries (N+1)', Action: call microflow FlowScope.PLAY_Queries)
+        dynamictext dQueries (Content: 'A select per item in a loop. See the Queries tab.', Class: 'fs-hint')
+      }
+      container ctnRowMemList (Class: 'fs-scn') {
+        actionbutton btnMemList (Caption: 'Memory: big object list', Action: call microflow FlowScope.PLAY_MemoryList)
+        dynamictext dMemList (Content: '60,000 objects built in memory, never saved.', Class: 'fs-hint')
+      }
+      container ctnRowMemText (Class: 'fs-scn') {
+        actionbutton btnMemText (Caption: 'Memory: big text', Action: call microflow FlowScope.PLAY_MemoryText)
+        dynamictext dMemText (Content: 'A text doubled until it is large. No database involved.', Class: 'fs-hint')
+      }
+      container ctnRowNested (Class: 'fs-scn') {
+        actionbutton btnNested (Caption: 'Nested sub-flows', Action: call microflow FlowScope.PLAY_Nested)
+        dynamictext dNested (Content: 'Three levels of sub-flows, for the indented breakdown.', Class: 'fs-hint')
+      }
+      container ctnRowAll (Class: 'fs-scn') {
+        actionbutton btnAll (Caption: 'Run everything', Action: call microflow FlowScope.PLAY_All, ButtonStyle: primary)
+        dynamictext dAll (Content: 'The slow, query, memory and nested scenarios in a row.', Class: 'fs-hint')
+      }
+    }
+    actionbutton btnClose (Caption: 'Close', Action: close page)
+  } } }
+};
+
+GRANT VIEW ON PAGE FlowScope.Playground TO FlowScope.Developer;
+GRANT EXECUTE ON MICROFLOW FlowScope.PLAY_Fast TO FlowScope.Developer;
+GRANT EXECUTE ON MICROFLOW FlowScope.PLAY_Slow TO FlowScope.Developer;
+GRANT EXECUTE ON MICROFLOW FlowScope.PLAY_VerySlow TO FlowScope.Developer;
+GRANT EXECUTE ON MICROFLOW FlowScope.PLAY_Queries TO FlowScope.Developer;
+GRANT EXECUTE ON MICROFLOW FlowScope.PLAY_MemoryList TO FlowScope.Developer;
+GRANT EXECUTE ON MICROFLOW FlowScope.PLAY_MemoryText TO FlowScope.Developer;
+GRANT EXECUTE ON MICROFLOW FlowScope.PLAY_Nested TO FlowScope.Developer;
+GRANT EXECUTE ON MICROFLOW FlowScope.PLAY_All TO FlowScope.Developer;
