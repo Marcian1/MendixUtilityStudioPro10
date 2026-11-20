@@ -1,0 +1,246 @@
+mdl 1;
+
+-- Java actions are one-line calls into javasource/memorywatch/implementation, as in FlowScope.
+
+/** Applies the settings to the watcher. Cheap and safe to call as often as you like. */
+CREATE OR MODIFY JAVA ACTION MemoryWatch.ConfigureWatch(
+  /** Watching on or off. */
+  Enabled: Boolean NOT NULL,
+  /** Old generation share, after a collection, above which an event is written. */
+  ThresholdPercent: Integer NOT NULL,
+  /** At most one event per this many seconds. */
+  MinIntervalSeconds: Integer NOT NULL,
+  /** Read each thread's allocation to show which threads were busy. */
+  SampleThreads: Boolean NOT NULL
+) RETURNS Boolean
+AS $$
+memorywatch.implementation.MemoryWatchEngine.get().configure(Enabled, ThresholdPercent.intValue(), MinIntervalSeconds.intValue(), SampleThreads);
+return true;
+$$;
+
+/** Fills the status object with what the watcher is doing right now. */
+CREATE OR MODIFY JAVA ACTION MemoryWatch.FillStatus(
+  /** The status object to fill. */
+  Status: MemoryWatch.WatchStatus NOT NULL
+) RETURNS Boolean
+AS $$
+final com.mendix.systemwideinterfaces.core.IContext ctx = getContext();
+final com.mendix.systemwideinterfaces.core.IMendixObject st = Status.getMendixObject();
+for (java.util.Map.Entry<String, Object> e : memorywatch.implementation.MemoryWatchEngine.get().status().entrySet()) {
+  st.setValue(ctx, e.getKey().replace("Mb", "MB"), e.getValue());
+}
+return true;
+$$;
+
+/** Writes an event now, whatever the heap level, so the page can be tried out. */
+CREATE OR MODIFY JAVA ACTION MemoryWatch.RecordTestEvent() RETURNS Boolean
+AS $$
+memorywatch.implementation.MemoryWatchEngine.get().recordTestEvent();
+return true;
+$$;
+
+/** Playground: holds this many megabytes until TestRelease. Returns the total held. */
+CREATE OR MODIFY JAVA ACTION MemoryWatch.TestHold(
+  Megabytes: Integer NOT NULL
+) RETURNS Long
+AS $$
+return memorywatch.implementation.TestLoad.hold(Megabytes.intValue());
+$$;
+
+/** Playground: lets go of everything TestHold kept. Returns how many megabytes were freed. */
+CREATE OR MODIFY JAVA ACTION MemoryWatch.TestRelease() RETURNS Long
+AS $$
+return memorywatch.implementation.TestLoad.release();
+$$;
+
+/** Playground: a full garbage collection, which updates the old generation's after-collection level. */
+CREATE OR MODIFY JAVA ACTION MemoryWatch.TestCollect() RETURNS Boolean
+AS $$
+memorywatch.implementation.TestLoad.collect();
+return true;
+$$;
+
+/** Playground: allocates and drops memory as fast as it can for this many seconds. Returns megabytes churned. */
+CREATE OR MODIFY JAVA ACTION MemoryWatch.TestChurn(
+  Seconds: Integer NOT NULL
+) RETURNS Long
+AS $$
+return memorywatch.implementation.TestLoad.churn(Seconds.intValue());
+$$;
+
+/** Returns the single Settings object, creating it with its defaults the first time. */
+CREATE OR MODIFY MICROFLOW MemoryWatch.SUB_GetSettings ()
+RETURNS MemoryWatch.Settings AS $Result
+BEGIN
+  RETRIEVE $Existing FROM MemoryWatch.Settings FIRST;
+  IF $Existing != empty THEN
+    RETURN $Existing;
+  END IF;
+  $Created = CREATE MemoryWatch.Settings (Enabled = false, ThresholdPercent = 80, MinIntervalSeconds = 60, RetentionDays = 14, SampleThreads = true);
+  COMMIT $Created WITH EVENTS;
+  RETURN $Created;
+END;
+
+/** The settings object for the status banner. Read only; SUB_GetSettings is the one that creates it. */
+CREATE OR MODIFY MICROFLOW MemoryWatch.DS_Settings ()
+RETURNS MemoryWatch.Settings AS $Settings
+BEGIN
+  RETRIEVE $Found FROM MemoryWatch.Settings FIRST;
+  RETURN $Found;
+END;
+
+/** Hands the saved settings to the watcher. */
+CREATE OR MODIFY MICROFLOW MemoryWatch.SUB_ApplySettings ($Settings: MemoryWatch.Settings)
+BEGIN
+  LOG DEBUG NODE 'MemoryWatch' 'Applying the saved settings.';
+  $Applied = CALL JAVA ACTION MemoryWatch.ConfigureWatch(
+    Enabled = $Settings/Enabled,
+    ThresholdPercent = $Settings/ThresholdPercent,
+    MinIntervalSeconds = $Settings/MinIntervalSeconds,
+    SampleThreads = $Settings/SampleThreads
+  ) ON ERROR BEGIN
+    LOG ERROR NODE 'MemoryWatch' 'The memory watch settings could not be applied.';
+    RETURN;
+  END ERROR;
+END;
+
+/** Runs after every save of the Settings object, so a change takes effect at once. */
+DROP MICROFLOW IF EXISTS MemoryWatch.ACT_ApplySettings;
+CREATE OR MODIFY MICROFLOW MemoryWatch.ACT_ApplySettings ($Settings: MemoryWatch.Settings)
+BEGIN
+  CALL MICROFLOW MemoryWatch.SUB_ApplySettings(Settings = $Settings);
+END;
+
+/**
+ * Every minute: apply the saved settings again. This is what starts the watcher after the app starts
+ * (the project has only one after-startup slot and FlowScope holds it), and what puts it back if it was lost.
+ */
+CREATE OR MODIFY MICROFLOW MemoryWatch.SE_ApplySettings ()
+BEGIN
+  $Settings = CALL MICROFLOW MemoryWatch.SUB_GetSettings();
+  CALL MICROFLOW MemoryWatch.SUB_ApplySettings(Settings = $Settings);
+END;
+
+CREATE OR MODIFY SCHEDULED EVENT MemoryWatch.SE_ApplySettings (
+  Microflow: MemoryWatch.SE_ApplySettings,
+  Repeat: Minutely,
+  Multiplier: 1,
+  Enabled: true,
+  OnOverlap: DelayNext,
+  TimeZone: UTC
+);
+
+ALTER ENTITY MemoryWatch.Settings ADD EVENT HANDLER IF NOT EXISTS ON AFTER COMMIT CALL MemoryWatch.ACT_ApplySettings($currentObject);
+
+/** Switches watching on. Committing runs the after-commit event, which applies it at once. */
+CREATE OR MODIFY MICROFLOW MemoryWatch.SUB_EnableWatch ($Settings: MemoryWatch.Settings)
+BEGIN
+  CHANGE $Settings (Enabled = true);
+  COMMIT $Settings WITH EVENTS REFRESH;
+END;
+
+/** The status banner's "Turn on watching" button. */
+CREATE OR MODIFY MICROFLOW MemoryWatch.ACT_EnableWatch ($Settings: MemoryWatch.Settings)
+BEGIN
+  CALL MICROFLOW MemoryWatch.SUB_EnableWatch(Settings = $Settings);
+END;
+
+/** The status tiles: what the watcher is doing right now. */
+CREATE OR MODIFY MICROFLOW MemoryWatch.DS_Status ()
+RETURNS MemoryWatch.WatchStatus AS $Status
+BEGIN
+  $Status = CREATE MemoryWatch.WatchStatus ();
+  $Filled = CALL JAVA ACTION MemoryWatch.FillStatus(Status = $Status) ON ERROR BEGIN
+    LOG ERROR NODE 'MemoryWatch' 'The memory watch status could not be read.';
+    RETURN $Status;
+  END ERROR;
+  RETURN $Status;
+END;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.SUB_RecordTestEvent ()
+BEGIN
+  $Done = CALL JAVA ACTION MemoryWatch.RecordTestEvent() ON ERROR BEGIN
+    LOG ERROR NODE 'MemoryWatch' 'The test event could not be recorded.';
+    RETURN;
+  END ERROR;
+END;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.ACT_RecordTestEvent ()
+BEGIN
+  CALL MICROFLOW MemoryWatch.SUB_RecordTestEvent();
+END;
+
+/** Deletes events and floor points older than the retention setting, 500 at a time. */
+CREATE OR MODIFY MICROFLOW MemoryWatch.SUB_DeleteOld ()
+BEGIN
+  $Settings = CALL MICROFLOW MemoryWatch.SUB_GetSettings();
+  DECLARE $Cutoff DateTime = addDays([%CurrentDateTime%], -1 * $Settings/RetentionDays);
+  DECLARE $More Boolean = true;
+  WHILE $More
+  BEGIN
+    RETRIEVE $Old FROM MemoryWatch.MemoryEvent WHERE OccurredAt < $Cutoff LIMIT 500;
+    $Count = count $Old;
+    DELETE $Old;
+    SET $More = $Count = 500;
+  END WHILE;
+  SET $More = true;
+  WHILE $More
+  BEGIN
+    RETRIEVE $OldPoints FROM MemoryWatch.GcFloorPoint WHERE Timestamp < $Cutoff LIMIT 500;
+    $PointCount = count $OldPoints;
+    DELETE $OldPoints;
+    SET $More = $PointCount = 500;
+  END WHILE;
+END;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.SE_DeleteOld ()
+BEGIN
+  CALL MICROFLOW MemoryWatch.SUB_DeleteOld();
+END;
+
+CREATE OR MODIFY SCHEDULED EVENT MemoryWatch.SE_NightlyCleanup (
+  Microflow: MemoryWatch.SE_DeleteOld,
+  Repeat: Daily,
+  HourOfDay: 3,
+  MinuteOfHour: 30,
+  TimeZone: Server,
+  Enabled: true
+);
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.SUB_DeleteAll ()
+BEGIN
+  DECLARE $More Boolean = true;
+  WHILE $More
+  BEGIN
+    RETRIEVE $Events FROM MemoryWatch.MemoryEvent LIMIT 500;
+    $Count = count $Events;
+    DELETE $Events;
+    SET $More = $Count = 500;
+  END WHILE;
+  SET $More = true;
+  WHILE $More
+  BEGIN
+    RETRIEVE $Points FROM MemoryWatch.GcFloorPoint LIMIT 500;
+    $PointCount = count $Points;
+    DELETE $Points;
+    SET $More = $PointCount = 500;
+  END WHILE;
+END;
+
+DROP MICROFLOW IF EXISTS MemoryWatch.ACT_DeleteAll;
+CREATE OR MODIFY MICROFLOW MemoryWatch.ACT_DeleteAll ()
+BEGIN
+  CALL MICROFLOW MemoryWatch.SUB_DeleteAll();
+END;
+
+GRANT EXECUTE ON MICROFLOW MemoryWatch.SUB_GetSettings TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.DS_Settings TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.ACT_ApplySettings TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.SUB_ApplySettings TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.SUB_EnableWatch TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.SUB_RecordTestEvent TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.SUB_DeleteAll TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.ACT_EnableWatch TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.DS_Status TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.ACT_RecordTestEvent TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.ACT_DeleteAll TO MemoryWatch.Admin;

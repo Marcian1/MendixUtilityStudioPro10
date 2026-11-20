@@ -28,6 +28,8 @@ final class CapturedRun {
     long selects;
     long updates;
     int subflows;
+    long heapStartMb;
+    long heapEndMb;
     String executionId;
     String node;
     final List<Step> steps = new ArrayList<>();

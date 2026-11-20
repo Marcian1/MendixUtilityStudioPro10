@@ -1,0 +1,111 @@
+mdl 1;
+
+-- Scenarios for trying MemoryWatch against known behaviour. They use the playground Java actions
+-- (TestLoad), which hold, free and churn memory on purpose. Lower the threshold in Settings first (for
+-- example 10%), because on a developer machine the heap is big and an ordinary scenario would not reach 80%.
+--   PLAY_HoldAndCollect  holds memory, forces a collection while the flow is still running, then frees it:
+--                        one flow alone at the event, so the attribution is exact
+--   PLAY_BigList         the same with a realistic Mendix object list instead of raw bytes
+--   PLAY_Quiet           does nothing for 12 s: the innocent bystander when started next to the others
+--   PLAY_LeakMore        holds 150 MB for good and collects, so the memory floor steps up
+--   PLAY_ReleaseAll      frees what PLAY_LeakMore held and collects, so the floor steps back down
+--   PLAY_Churn           allocates and drops memory for 12 s: heavy allocation, nothing retained, no event
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.PLAY_HoldAndCollect ()
+FOLDER 'Playground'
+BEGIN
+  $Held = CALL JAVA ACTION MemoryWatch.TestHold(Megabytes = 300);
+  $Collected = CALL JAVA ACTION MemoryWatch.TestCollect();
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 6000);
+  $Freed = CALL JAVA ACTION MemoryWatch.TestRelease();
+  $CollectedAgain = CALL JAVA ACTION MemoryWatch.TestCollect();
+END;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.PLAY_BigList ()
+FOLDER 'Playground'
+BEGIN
+  $Items = CREATE LIST OF MemoryWatch.WatchStatus;
+  DECLARE $I Integer = 0;
+  WHILE $I < 250000
+  BEGIN
+    $New = CREATE MemoryWatch.WatchStatus (PoolName = 'Item ' + toString($I), EventsRecorded = $I);
+    ADD $New TO $Items;
+    SET $I = $I + 1;
+  END WHILE;
+  $Collected = CALL JAVA ACTION MemoryWatch.TestCollect();
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 5000);
+  $Count = count $Items;
+  LOG INFO NODE 'MemoryWatchPlayground' 'The list held {1} objects.' WITH ({1} = toString($Count));
+END;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.PLAY_Quiet ()
+FOLDER 'Playground'
+BEGIN
+  $Waited = CALL JAVA ACTION CommunityCommons.Delay(delaytime = 12000);
+END;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.PLAY_LeakMore ()
+FOLDER 'Playground'
+BEGIN
+  $Held = CALL JAVA ACTION MemoryWatch.TestHold(Megabytes = 150);
+  $Collected = CALL JAVA ACTION MemoryWatch.TestCollect();
+END;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.PLAY_ReleaseAll ()
+FOLDER 'Playground'
+BEGIN
+  $Freed = CALL JAVA ACTION MemoryWatch.TestRelease();
+  $Collected = CALL JAVA ACTION MemoryWatch.TestCollect();
+END;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.PLAY_Churn ()
+FOLDER 'Playground'
+BEGIN
+  $Churned = CALL JAVA ACTION MemoryWatch.TestChurn(Seconds = 12);
+END;
+
+CREATE OR MODIFY PAGE MemoryWatch.Playground (
+  Title: 'Playground',
+  Layout: Atlas_Core.PopupLayout,
+  PopupWidth: 760,
+  PopupHeight: 640
+) {
+  layoutgrid lgP { row { column (DesktopWidth: 12) {
+    dynamictext txtIntro (Content: 'Scenarios that hold, free or churn memory on purpose. Lower the threshold in Settings first (10% is a good start), turn watching on, then press refresh on the overview after each run.', Class: 'mw-hint')
+    container ctnBtns (Class: 'mw-playground') {
+      container ctnRowHold (Class: 'mw-scn') {
+        actionbutton btnHold (Caption: 'Hold memory and collect', Action: call microflow MemoryWatch.PLAY_HoldAndCollect)
+        dynamictext dHold (Content: 'Holds 300 MB, forces a collection, waits 6 s. One flow alone at the event.', Class: 'mw-hint')
+      }
+      container ctnRowList (Class: 'mw-scn') {
+        actionbutton btnList (Caption: 'Big object list', Action: call microflow MemoryWatch.PLAY_BigList)
+        dynamictext dList (Content: '250,000 Mendix objects in memory while a collection runs.', Class: 'mw-hint')
+      }
+      container ctnRowQuiet (Class: 'mw-scn') {
+        actionbutton btnQuiet (Caption: 'Quiet flow (12 s)', Action: call microflow MemoryWatch.PLAY_Quiet)
+        dynamictext dQuiet (Content: 'Does nothing. Start it, then start a memory scenario in a second tab: both will be listed at the event.', Class: 'mw-hint')
+      }
+      container ctnRowLeak (Class: 'mw-scn') {
+        actionbutton btnLeak (Caption: 'Leak 150 MB more', Action: call microflow MemoryWatch.PLAY_LeakMore)
+        dynamictext dLeak (Content: 'Holds 150 MB for good and collects. Click it several times to watch the memory floor climb.', Class: 'mw-hint')
+      }
+      container ctnRowRelease (Class: 'mw-scn') {
+        actionbutton btnRelease (Caption: 'Release everything leaked', Action: call microflow MemoryWatch.PLAY_ReleaseAll)
+        dynamictext dRelease (Content: 'Frees what the leak button held and collects, so the floor drops again.', Class: 'mw-hint')
+      }
+      container ctnRowChurn (Class: 'mw-scn') {
+        actionbutton btnChurn (Caption: 'Churn memory (12 s)', Action: call microflow MemoryWatch.PLAY_Churn)
+        dynamictext dChurn (Content: 'Allocates and drops memory as fast as it can. No event, but a test event taken now shows this thread as busy.', Class: 'mw-hint')
+      }
+    }
+    actionbutton btnClose (Caption: 'Close', Action: close page)
+  } } }
+};
+
+GRANT VIEW ON PAGE MemoryWatch.Playground TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.PLAY_HoldAndCollect TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.PLAY_BigList TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.PLAY_Quiet TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.PLAY_LeakMore TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.PLAY_ReleaseAll TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.PLAY_Churn TO MemoryWatch.Admin;

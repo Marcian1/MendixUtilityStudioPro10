@@ -61,6 +61,32 @@ public final class CaptureEngine {
         return INSTANCE;
     }
 
+    /**
+     * The entry-point microflows running right now, as {name, age in ms, null} triples, oldest first, followed by
+     * the ones that finished in the last few seconds as {name, ran ms, ms since it finished}. A heap notification
+     * arrives a moment after the collection that caused it, so a flow that allocated and finished in between would
+     * otherwise be missing. Null while capture is off, because the list is built from the microflow log and would
+     * be empty rather than unknown. Read by MemoryWatch by reflection, so keep the name and the shape.
+     */
+    public java.util.List<Object[]> runningFlows() {
+        if (!enabled) {
+            return null;
+        }
+        java.util.List<Object[]> out = new java.util.ArrayList<>();
+        for (RunState s : active.values()) {
+            out.add(new Object[] { s.rootName, s.ageMillis(), null });
+        }
+        out.sort((a, b) -> Long.compare((Long) b[1], (Long) a[1]));
+        long now = System.currentTimeMillis();
+        for (Object[] r : recentlyFinished) {
+            long ago = now - (Long) r[2];
+            if (ago <= RECENT_MS) {
+                out.add(new Object[] { r[0], r[1], ago });
+            }
+        }
+        return out;
+    }
+
     /** Applies the settings. Safe to call again whenever they change. */
     public synchronized void configure(boolean enable, long threshold, String includeRegexp, String excludeRegexp) {
         this.thresholdMs = Math.max(0, threshold);
@@ -219,10 +245,27 @@ public final class CaptureEngine {
             if (active.size() >= MAX_ACTIVE) {
                 return;
             }
-            state = new RunState(id, name, ts, !isTarget(name));
+            state = new RunState(id, name, ts, !isTarget(name), usedHeapMb());
             active.put(id, state);
         }
         state.startMicroflow(name, ts);
+    }
+
+    /** Microflows that finished within the last few seconds, as {name, ran ms, finished at ms}. For MemoryWatch. */
+    private final java.util.concurrent.ConcurrentLinkedDeque<Object[]> recentlyFinished = new java.util.concurrent.ConcurrentLinkedDeque<>();
+    private static final long RECENT_MS = 3000;
+    private static final int RECENT_MAX = 300;
+
+    private void rememberFinished(RunState state) {
+        long now = System.currentTimeMillis();
+        recentlyFinished.addLast(new Object[] { state.rootName, state.ageMillis(), now });
+        while (recentlyFinished.size() > RECENT_MAX) {
+            recentlyFinished.pollFirst();
+        }
+        Object[] head;
+        while ((head = recentlyFinished.peekFirst()) != null && now - (Long) head[2] > RECENT_MS) {
+            recentlyFinished.pollFirst();
+        }
     }
 
     private void onFinish(String id, long ts) {
@@ -230,8 +273,9 @@ public final class CaptureEngine {
         if (state == null) {
             return;
         }
-        if (state.finishMicroflow(ts)) {
+        if (state.finishMicroflow(ts, usedHeapMb())) {
             active.remove(id, state);
+            rememberFinished(state);
             if (state.ignored) {
                 return;
             }
@@ -342,6 +386,11 @@ public final class CaptureEngine {
     }
 
     // ---- helpers ---------------------------------------------------------------------------
+
+    private static long usedHeapMb() {
+        Runtime rt = Runtime.getRuntime();
+        return (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
+    }
 
     private static String hostName() {
         try {

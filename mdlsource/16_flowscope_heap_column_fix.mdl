@@ -1,0 +1,15 @@
+mdl 1;
+
+-- The heap column added by 15 wrapped its filter in a container, which Data grid 2 rejects at runtime.
+ALTER PAGE FlowScope.Executions {
+  drop gridExec column(HeapDeltaMB);
+  insert after gridExec column(SubflowCount) {
+    column colHeap (caption: 'Heap Δ (MB)', attribute: HeapDeltaMB, alignment: right) {
+      numberfilter nfHeap (Attribute: HeapDeltaMB)
+    }
+  }
+};
+
+ALTER PAGE FlowScope.Executions {
+  set (alignment: right) on gridExec column(HeapDeltaMB)
+};

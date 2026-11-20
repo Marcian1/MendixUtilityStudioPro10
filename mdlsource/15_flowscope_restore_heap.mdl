@@ -1,0 +1,24 @@
+mdl 1;
+
+-- The heap delta is back, at the user's request. It is the whole JVM's heap between the start and the end of the
+-- run, so concurrent requests and the garbage collector move it too: a hint, not the flow's own allocation.
+ALTER ENTITY FlowScope.Execution ADD ATTRIBUTE "HeapStartMB": Long DEFAULT 0;
+ALTER ENTITY FlowScope.Execution ADD ATTRIBUTE "HeapEndMB": Long DEFAULT 0;
+ALTER ENTITY FlowScope.Execution ADD ATTRIBUTE "HeapDeltaMB": Long DEFAULT 0;
+
+ALTER PAGE FlowScope.Executions {
+  insert after gridExec column(SubflowCount) {
+    column colHeap (caption: 'Heap Δ (MB)', attribute: HeapDeltaMB, alignment: right) {
+      filter fltHeap { numberfilter nfHeap (Attribute: HeapDeltaMB) }
+    }
+  }
+};
+
+ALTER PAGE FlowScope.Execution_Detail {
+  insert after ctnF3 {
+    container ctnFHeap (Class: 'fs-tile') {
+      dynamictext lFHeap (Content: 'JVM heap, start to end', Class: 'fs-label')
+      dynamictext vFHeap (Content: '{1} to {2} MB ({3})', ContentParams: ({1} = HeapStartMB, {2} = HeapEndMB, {3} = HeapDeltaMB), Class: 'fs-value')
+    }
+  }
+};

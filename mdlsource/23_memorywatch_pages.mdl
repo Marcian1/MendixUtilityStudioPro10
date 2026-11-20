@@ -1,0 +1,293 @@
+mdl 1;
+
+CREATE OR MODIFY MICROFLOW MemoryWatch.ACT_OpenSettings ()
+BEGIN
+  $Settings = CALL MICROFLOW MemoryWatch.SUB_GetSettings();
+  SHOW PAGE MemoryWatch.Settings_Popup (Settings = $Settings);
+END;
+
+CREATE OR MODIFY PAGE MemoryWatch.Settings_Popup (
+  Params: ($Settings: MemoryWatch.Settings),
+  Title: 'Memory watch settings',
+  Layout: Atlas_Core.PopupLayout,
+  PopupWidth: 560,
+  PopupHeight: 640
+) {
+  layoutgrid lgS { row { column (DesktopWidth: 12) {
+  dataview dvSettings (DataSource: $Settings) {
+    checkbox cbEnabled (Label: 'Watching enabled', Attribute: Enabled)
+    textbox txtThreshold (Label: 'Write an event when the old generation is above (%)', Attribute: ThresholdPercent)
+    dynamictext hintThreshold (Content: 'Measured right after a garbage collection, so it is memory that could not be freed. 80 is a good start.', Class: 'mw-hint')
+    textbox txtInterval (Label: 'At most one event per (seconds)', Attribute: MinIntervalSeconds)
+    dynamictext hintInterval (Content: 'During a long spell of pressure this keeps it to one row per interval.', Class: 'mw-hint')
+    checkbox cbSample (Label: 'Show which threads were busy', Attribute: SampleThreads)
+    dynamictext hintSample (Content: 'Reads each thread''s allocation every 10 seconds. Cheap: no stack traces, no pauses.', Class: 'mw-hint')
+    textbox txtRetention (Label: 'Keep data for (days)', Attribute: RetentionDays)
+    dynamictext hintRetention (Content: 'Older events and memory floor points are deleted every night.', Class: 'mw-hint')
+    container ctnFoot (Class: 'mw-foot') {
+      actionbutton btnDeleteAll (Caption: 'Delete all events', Action: call microflow MemoryWatch.ACT_DeleteAll, ButtonStyle: danger)
+      actionbutton btnCancel (Caption: 'Cancel', Action: cancel changes close page)
+      actionbutton btnSave (Caption: 'Save', Action: save changes close page, ButtonStyle: primary)
+    }
+  }
+  } } }
+};
+
+/** One event in full: how tight memory was, which flows were running and which threads were busy. */
+CREATE OR MODIFY PAGE MemoryWatch.Event_Detail (
+  Params: ($Event: MemoryWatch.MemoryEvent),
+  Title: 'Memory event',
+  Layout: Atlas_Core.PopupLayout,
+  PopupWidth: 960,
+  PopupHeight: 780
+) {
+  layoutgrid lgD { row { column (DesktopWidth: 12) {
+  dataview dvEvent (DataSource: $Event) {
+    container ctnHero (Class: 'mw-hero') {
+      dynamictext txtWhen (Content: '{1}', ContentParams: ({1} = OccurredAt format (dateFormat: DateTime)), Class: 'mw-hero-title')
+      dynamictext txtPct (
+        Content: 'Old generation {1}% full after cleanup',
+        ContentParams: ({1} = UsedPercent),
+        Class: 'mw-badge mw-badge--lg',
+        DynamicClasses: if $currentObject/UsedPercent >= 95 then 'mw-badge--bad' else if $currentObject/UsedPercent >= 85 then 'mw-badge--warn' else ''
+      )
+    }
+    container ctnNote (Class: 'mw-note', Visible: $currentObject/Note != empty) {
+      dynamictext txtNote (Content: '{1}', ContentParams: ({1} = Note))
+    }
+    container ctnTiles (Class: 'mw-tiles') {
+      container ctnT1 (Class: 'mw-tile') {
+        dynamictext lT1 (Content: 'Old generation after cleanup', Class: 'mw-label')
+        dynamictext vT1 (Content: '{1} of {2} MB', ContentParams: ({1} = OldGenUsedMB, {2} = OldGenMaxMB), Class: 'mw-value')
+      }
+      container ctnT2 (Class: 'mw-tile') {
+        dynamictext lT2 (Content: 'Whole heap at that moment', Class: 'mw-label')
+        dynamictext vT2 (Content: '{1} of {2} MB', ContentParams: ({1} = HeapUsedMB, {2} = HeapMaxMB), Class: 'mw-value')
+      }
+      container ctnT3 (Class: 'mw-tile') {
+        dynamictext lT3 (Content: 'Flows running or just done', Class: 'mw-label')
+        dynamictext vT3 (Content: '{1}', ContentParams: ({1} = RunningFlowCount), Class: 'mw-value', Visible: $currentObject/FlowsKnown)
+        dynamictext vT3u (Content: 'unknown', Class: 'mw-value', Visible: not($currentObject/FlowsKnown))
+      }
+    }
+    container ctnUnknown (Class: 'mw-note', Visible: not($currentObject/FlowsKnown)) {
+      dynamictext txtUnknown (Content: 'The running flows are unknown for this event: FlowScope capture was off, so nothing was tracking them. Turn capture on in FlowScope to see them here.')
+    }
+    dynamictext hFlows (Content: 'Flows running at that moment, and any that had just finished', Class: 'mw-list-title', Visible: $currentObject/FlowsKnown)
+    container ctnFlows (Class: 'mw-list', Visible: $currentObject/FlowsKnown) {
+      container ctnFlowHead (Class: 'mw-row mw-row--head') {
+        dynamictext fhName (Content: 'Microflow')
+        dynamictext fhAge (Content: 'Ran for (s)', Class: 'mw-num')
+        dynamictext fhSp (Content: 'State')
+      }
+      container ctnFlowScroll (Class: 'mw-scroll') {
+        listview lvFlows (DataSource: DATABASE FROM $currentObject/MemoryWatch.MemoryEventFlow_MemoryEvent/MemoryWatch.MemoryEventFlow SORT BY RunningSeconds DESC, PageSize: 200) {
+          container ctnFlow (Class: 'mw-row') {
+            dynamictext txtFlowName (Content: '{1}', ContentParams: ({1} = FlowName), Class: 'mw-mono mw-clip')
+            dynamictext txtFlowAge (Content: '{1}', ContentParams: ({1} = RunningSeconds format (decimalPrecision: 1)), Class: 'mw-num')
+            dynamictext txtFlowSp (Content: '{1}', ContentParams: ({1} = if $currentObject/StillRunning then 'Running' else 'Finished just before'), Class: 'mw-hint')
+          }
+        }
+      }
+    }
+    dynamictext hThreads (Content: 'Threads that allocated the most just before', Class: 'mw-list-title')
+    container ctnThreads (Class: 'mw-list') {
+      container ctnThreadHead (Class: 'mw-row mw-row--head mw-row--threads') {
+        dynamictext thName (Content: 'Thread')
+        dynamictext thKind (Content: 'Kind')
+        dynamictext thMb (Content: 'Allocated (MB)', Class: 'mw-num')
+        dynamictext thWin (Content: 'Over (s)', Class: 'mw-num')
+      }
+      container ctnThreadScroll (Class: 'mw-scroll') {
+        listview lvThreads (DataSource: DATABASE FROM $currentObject/MemoryWatch.MemoryEventThread_MemoryEvent/MemoryWatch.MemoryEventThread SORT BY AllocatedMB DESC, PageSize: 50) {
+          container ctnThread (Class: 'mw-row mw-row--threads') {
+            dynamictext txtThName (Content: '{1}', ContentParams: ({1} = ThreadName), Class: 'mw-mono mw-clip')
+            dynamictext txtThKind (Content: '{1}', ContentParams: ({1} = Kind))
+            dynamictext txtThMb (Content: '{1}', ContentParams: ({1} = AllocatedMB), Class: 'mw-num')
+            dynamictext txtThWin (Content: '{1}', ContentParams: ({1} = WindowSeconds), Class: 'mw-num')
+          }
+        }
+      }
+    }
+    dynamictext hintThreads (Content: 'Allocated is memory a thread asked for, not memory it still holds. A busy thread is a lead, not proof.', Class: 'mw-hint')
+    container ctnFoot (Class: 'mw-foot') {
+      actionbutton btnClose (Caption: 'Close', Action: close page, ButtonStyle: primary)
+    }
+  }
+  } } }
+};
+
+/** The overview: status, the events, the flows that keep showing up, and the memory floor over time. */
+CREATE OR MODIFY PAGE MemoryWatch.Overview (
+  Title: 'Memory watch',
+  Layout: Atlas_Core.Atlas_Default,
+  Url: 'memorywatch'
+) {
+  layoutgrid lgMain {
+    row {
+      column (DesktopWidth: 12) {
+        container ctnHeader (Class: 'mw-header') {
+          container ctnTitleBlock {
+            dynamictext txtTitle (Content: 'Memory watch', RenderMode: H2, Class: 'mw-title')
+            dynamictext txtSub (Content: 'Notes taken each time the heap stayed high after a garbage collection: what was running, and which threads were busy. Look here after a memory spike, not during it.', Class: 'mw-sub')
+          }
+          container ctnActions (Class: 'mw-actions') {
+            actionbutton btnPlayground (Caption: 'Playground', Action: show page MemoryWatch.Playground)
+            actionbutton btnTest (Caption: 'Record a test event', Action: call microflow MemoryWatch.ACT_RecordTestEvent)
+            actionbutton btnSettings (Caption: 'Settings', Action: call microflow MemoryWatch.ACT_OpenSettings, ButtonStyle: primary)
+          }
+        }
+        dataview dvStatus (DataSource: MICROFLOW MemoryWatch.DS_Settings) {
+          container ctnOff (Class: 'mw-banner mw-banner--off', Visible: not($currentObject/Enabled)) {
+            dynamictext txtOff (Content: 'Watching is off, so nothing is being recorded. Turn it on to start.')
+            actionbutton btnTurnOn (
+              Caption: 'Turn on watching',
+              Action: call microflow MemoryWatch.ACT_EnableWatch(Settings = $currentObject),
+              ButtonStyle: primary
+            )
+          }
+          container ctnOn (Class: 'mw-banner mw-banner--on', Visible: $currentObject/Enabled) {
+            dynamictext txtOn (
+              Content: 'Watching: an event is written when the old generation is above {1}% after a collection, at most one every {2} s, kept {3} days. Press refresh to see new ones.',
+              ContentParams: ({1} = ThresholdPercent, {2} = MinIntervalSeconds, {3} = RetentionDays)
+            )
+          }
+        }
+        dataview dvTiles (DataSource: MICROFLOW MemoryWatch.DS_Status) {
+          container ctnTiles (Class: 'mw-tiles') {
+            container ctnS1 (Class: 'mw-tile') {
+              dynamictext lS1 (Content: 'Watching pool', Class: 'mw-label')
+              dynamictext vS1 (Content: '{1}', ContentParams: ({1} = PoolName), Class: 'mw-value')
+            }
+            container ctnS2 (Class: 'mw-tile') {
+              dynamictext lS2 (Content: 'Old generation now', Class: 'mw-label')
+              dynamictext vS2 (Content: '{1} of {2} MB', ContentParams: ({1} = OldGenUsedMB, {2} = PoolMaxMB), Class: 'mw-value')
+            }
+            container ctnS3 (Class: 'mw-tile') {
+              dynamictext lS3 (Content: 'Event level', Class: 'mw-label')
+              dynamictext vS3 (Content: '{1} MB', ContentParams: ({1} = ThresholdMB), Class: 'mw-value')
+            }
+            container ctnS4 (Class: 'mw-tile') {
+              dynamictext lS4 (Content: 'Events since start', Class: 'mw-label')
+              dynamictext vS4 (Content: '{1} written, {2} skipped', ContentParams: ({1} = EventsRecorded, {2} = EventsSkipped), Class: 'mw-value')
+            }
+            container ctnS5 (Class: 'mw-tile') {
+              dynamictext lS5 (Content: 'Running flows from FlowScope', Class: 'mw-label')
+              dynamictext vS5 (Content: 'linked', Class: 'mw-value', Visible: $currentObject/FlowScopeLinked)
+              dynamictext vS5n (Content: 'off - turn on FlowScope capture', Class: 'mw-value', Visible: not($currentObject/FlowScopeLinked))
+            }
+          }
+        }
+        container ctnCard (Class: 'mw-card') {
+          tabcontainer tabsMain {
+            tabpage tpEvents (Caption: 'Memory events') {
+              pluggablewidget 'com.mendix.widget.web.datagrid.Datagrid' gridEvents (
+                datasource: DATABASE MemoryWatch.MemoryEvent SORT BY OccurredAt DESC,
+                pageSize: 25,
+                pagingPosition: bottom,
+                onClick: show page MemoryWatch.Event_Detail(Event = $currentObject)
+              ) {
+                column colWhen (header: 'When', attribute: OccurredAt, showContentAs: customContent, width: manual, size: 2) {
+                  content {
+                    dynamictext txtGridWhen (Content: '{1}', ContentParams: ({1} = OccurredAt format (dateFormat: DateTime)))
+                  }
+                  filter { datefilter dfWhen (Attribute: OccurredAt) }
+                }
+                column colPct (header: 'Full after cleanup', attribute: UsedPercent, showContentAs: customContent, alignment: right) {
+                  content {
+                    dynamictext txtGridPct (
+                      Content: '{1}%',
+                      ContentParams: ({1} = UsedPercent),
+                      Class: 'mw-badge',
+                      DynamicClasses: if $currentObject/UsedPercent >= 95 then 'mw-badge--bad' else if $currentObject/UsedPercent >= 85 then 'mw-badge--warn' else ''
+                    )
+                  }
+                  filter { numberfilter nfPct (Attribute: UsedPercent) }
+                }
+                column colOld (header: 'Old gen (MB)', attribute: OldGenUsedMB, alignment: right) {
+                  filter { numberfilter nfOld (Attribute: OldGenUsedMB) }
+                }
+                column colHeap (header: 'Heap used (MB)', attribute: HeapUsedMB, alignment: right) {
+                  filter { numberfilter nfHeap (Attribute: HeapUsedMB) }
+                }
+                column colFlows (header: 'Flows running', attribute: RunningFlowCount, showContentAs: customContent, alignment: right) {
+                  content {
+                    dynamictext txtGridFlows (Class: 'mw-num', 
+                      Content: '{1}',
+                      ContentParams: ({1} = RunningFlowCount),
+                      Visible: $currentObject/FlowsKnown
+                    )
+                    dynamictext txtGridFlowsUnknown (Content: 'unknown', Class: 'mw-hint mw-num', Visible: not($currentObject/FlowsKnown))
+                  }
+                  filter { numberfilter nfFlows (Attribute: RunningFlowCount) }
+                }
+              }
+            }
+            tabpage tpSuspects (Caption: 'Suspect flows') {
+              dynamictext txtSuspectsHint (Content: 'Flows ranked by how many memory events they were running in. A flow that keeps showing up is a suspect; this is a lead, not proof, because a flow can be running next to the one that really holds the memory.', Class: 'mw-hint')
+              pluggablewidget 'com.mendix.widget.web.datagrid.Datagrid' gridSuspects (
+                datasource: DATABASE MemoryWatch.SuspectFlow SORT BY EventsSeen DESC,
+                pageSize: 25,
+                pagingPosition: bottom
+              ) {
+                column colSName (header: 'Microflow', attribute: FlowName, showContentAs: customContent, width: manual, size: 4) {
+                  content {
+                    dynamictext txtGridSName (Content: '{1}', ContentParams: ({1} = FlowName), Class: 'mw-mono mw-clip')
+                  }
+                  filter { textfilter tfSName (Attribute: FlowName) }
+                }
+                column colSSeen (header: 'Events seen in', attribute: EventsSeen, alignment: right) {
+                  filter { numberfilter nfSSeen (Attribute: EventsSeen) }
+                }
+                column colSLong (header: 'Longest run at an event (s)', attribute: LongestRunSeconds, alignment: right) {
+                  filter { numberfilter nfSLong (Attribute: LongestRunSeconds) }
+                }
+                column colSLast (header: 'Last seen', attribute: LastSeen, showContentAs: customContent) {
+                  content {
+                    dynamictext txtGridSLast (Content: '{1}', ContentParams: ({1} = LastSeen format (dateFormat: DateTime)))
+                  }
+                  filter { datefilter dfSLast (Attribute: LastSeen) }
+                }
+              }
+            }
+            tabpage tpFloor (Caption: 'Memory floor') {
+              dynamictext txtFloorHint (Content: 'The lowest old-generation level after a garbage collection, per minute in which one happened. A healthy app returns to about the same floor; a floor that keeps climbing over hours means something is holding on to memory.', Class: 'mw-hint')
+              timeseries tsFloor (
+                enableAdvancedOptions: false,
+                showPlaygroundSlot: false,
+                yAxisLabel: 'MB',
+                showLegend: true,
+                showRangeSlider: false,
+                gridLines: 'horizontal',
+                widthUnit: 'percentage',
+                width: 100,
+                heightUnit: 'pixels',
+                height: 320,
+                enableThemeConfig: false,
+                yAxisRangeMode: 'tozero'
+              ) {
+                line (
+                  DataSource: DATABASE MemoryWatch.GcFloorPoint SORT BY Timestamp ASC,
+                  dataSet: 'static',
+                  staticName: 'Old generation after cleanup',
+                  staticXAttribute: Timestamp,
+                  staticYAttribute: OldGenAfterGcMB,
+                  aggregationType: 'none',
+                  interpolation: 'linear',
+                  lineStyle: 'custom',
+                  lineColor: '#264AE5',
+                  enableFillArea: 'true'
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
+GRANT VIEW ON PAGE MemoryWatch.Overview TO MemoryWatch.Admin;
+GRANT VIEW ON PAGE MemoryWatch.Event_Detail TO MemoryWatch.Admin;
+GRANT VIEW ON PAGE MemoryWatch.Settings_Popup TO MemoryWatch.Admin;
+GRANT EXECUTE ON MICROFLOW MemoryWatch.ACT_OpenSettings TO MemoryWatch.Admin;

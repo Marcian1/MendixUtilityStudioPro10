@@ -1,0 +1,71 @@
+@import '../../../theme/web/custom-variables';
+
+// Same palette and spacing as FlowScope so the tools feel like one family; classes are prefixed mw- so
+// neither module depends on the other's stylesheet.
+$mw-brand-soft: #EEF1FD;
+$mw-text: #1F2433;
+$mw-text2: #6C7180;
+$mw-line: #E7E8EA;
+$mw-bg: #F5F6F6;
+$mw-ok: #2E9E3F;
+$mw-warn: #F99B1D;
+$mw-bad: #E33F4E;
+$mw-radius: 8px;
+
+.mw-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.mw-title { margin: 0 0 4px; }
+.mw-sub { color: $mw-text2; max-width: 720px; margin: 0; }
+.mw-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.mw-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px 10px 16px; margin-bottom: 16px; border: 1px solid $mw-line; border-left: 4px solid $mw-text2; border-radius: $mw-radius; background: #fff; color: $mw-text2; font-size: 13px; }
+.mw-banner .mx-text { flex: 1; min-width: 200px; }
+.mw-banner--on { border-left-color: $mw-ok; }
+.mw-banner--off { background: #FEF3E0; border-color: $mw-warn; border-left-color: $mw-warn; color: $mw-text; }
+.mw-banner--off .mx-text { font-weight: 600; }
+
+.mw-card { background: #fff; border: 1px solid $mw-line; border-radius: $mw-radius; padding: 8px 16px 16px; box-shadow: 0 1px 2px rgba(31, 36, 51, .05); }
+.mw-card .widget-datagrid .th { background: $mw-bg; font-size: 12px; font-weight: 600; color: #3B4252; }
+.mw-card .widget-datagrid .tr:hover .td { background: $mw-brand-soft; }
+.mw-card .widget-datagrid .tr[role="row"] { cursor: pointer; }
+.mw-card .widget-datagrid .td { font-variant-numeric: tabular-nums; }
+.mw-card .widget-datagrid .td .mw-clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+
+.mw-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.mw-tile { background: $mw-bg; border-radius: $mw-radius; padding: 10px 14px; min-width: 0; }
+.mw-tile--wide { grid-column: span 2; }
+.mw-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: $mw-text2; margin-bottom: 2px; }
+.mw-value { font-size: 15px; font-weight: 600; color: $mw-text; overflow: hidden; text-overflow: ellipsis; display: block; }
+
+.mw-mono { font-family: Consolas, 'SF Mono', monospace; font-size: 13px; }
+.mw-clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mw-num { text-align: right; font-variant-numeric: tabular-nums; }
+.mw-hint { font-size: 12px; color: $mw-text2; }
+
+.mw-badge { display: inline-block; min-width: 44px; text-align: center; padding: 1px 9px; border-radius: 10px; font-size: 12px; font-weight: 600; color: #fff; background: $mw-ok; }
+.mw-badge--warn { background: $mw-warn; }
+.mw-badge--bad { background: $mw-bad; }
+.mw-badge--lg { font-size: 14px; padding: 3px 14px; border-radius: 14px; flex: none; }
+
+.mw-hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.mw-hero-title { font-size: 17px; font-weight: 600; color: $mw-text; }
+
+.mw-list { background: #fff; border: 1px solid $mw-line; border-radius: $mw-radius; overflow: hidden; margin-bottom: 16px; }
+.mw-list-title { font-weight: 600; margin: 8px 0; }
+.mw-row { display: grid; grid-template-columns: minmax(200px, 1fr) 120px 120px; gap: 10px; align-items: center; padding: 7px 14px; border-bottom: 1px solid $mw-line; font-size: 13px; }
+.mw-row:hover { background: $mw-brand-soft; }
+.mw-row--head, .mw-row--head:hover { background: $mw-bg; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: #3B4252; }
+.mw-row--threads { grid-template-columns: minmax(180px, 1fr) 130px 130px 90px; }
+.mw-scroll { max-height: 30vh; overflow-y: auto; }
+.mw-scroll .mx-listview > ul, .mw-scroll .mx-listview > ul > li { margin: 0; padding: 0; border: 0; list-style: none; }
+.mw-foot { margin-top: 16px; display: flex; justify-content: flex-end; }
+.mw-note { padding: 10px 14px; margin-bottom: 14px; border-radius: $mw-radius; background: #FEF3E0; color: $mw-text; font-size: 13px; }
+
+.mw-playground { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; }
+.mw-scn { display: grid; grid-template-columns: 220px 1fr; gap: 14px; align-items: center; padding: 8px 12px; border: 1px solid $mw-line; border-radius: $mw-radius; }
+.mw-scn .btn { width: 100%; }
+
+@media (max-width: 700px) {
+  .mw-row, .mw-row--threads { grid-template-columns: minmax(120px, 1fr) 80px 80px; }
+  .mw-scn { grid-template-columns: 1fr; }
+  .mw-tile--wide { grid-column: span 1; }
+}

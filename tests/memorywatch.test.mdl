@@ -1,0 +1,73 @@
+/**
+ * MemoryWatch behaviour tests. They run against the real runtime, so only things that hold on every machine are
+ * asserted: the data side (retention, delete all, settings) and the Java actions' contracts. The memory pressure
+ * itself is exercised from the Playground page, because forcing a collection in a test would disturb the runner.
+ */
+
+/**
+ * @test settings are created once with watching off by default
+ * @expect $First/Enabled = false
+ * @expect $First/ThresholdPercent = 80
+ * @expect $First/RetentionDays = 14
+ * @expect $Second = $First
+ */
+$First = call microflow MemoryWatch.SUB_GetSettings();
+$Second = call microflow MemoryWatch.SUB_GetSettings();
+/
+
+/**
+ * @test events and floor points older than the retention period are deleted, newer ones stay
+ * @expect count($Events) = 1
+ * @expect count($Points) = 1
+ * @expect $Kept/UsedPercent = 91
+ */
+$Settings = call microflow MemoryWatch.SUB_GetSettings();
+$OldEvent = create MemoryWatch.MemoryEvent (OccurredAt = addDays([%CurrentDateTime%], -40), UsedPercent = 85);
+$NewEvent = create MemoryWatch.MemoryEvent (OccurredAt = addDays([%CurrentDateTime%], -1), UsedPercent = 91);
+$OldPoint = create MemoryWatch.GcFloorPoint (Timestamp = addDays([%CurrentDateTime%], -40), OldGenAfterGcMB = 10);
+$NewPoint = create MemoryWatch.GcFloorPoint (Timestamp = addDays([%CurrentDateTime%], -1), OldGenAfterGcMB = 20);
+commit $OldEvent;
+commit $NewEvent;
+commit $OldPoint;
+commit $NewPoint;
+call microflow MemoryWatch.SUB_DeleteOld();
+retrieve $Events from MemoryWatch.MemoryEvent;
+retrieve $Points from MemoryWatch.GcFloorPoint;
+retrieve $Kept from MemoryWatch.MemoryEvent where UsedPercent = 91 first;
+/
+
+/**
+ * @test deleting an event deletes the flows and threads recorded with it
+ * @expect count($Flows) = 0
+ * @expect count($Threads) = 0
+ */
+$Event = create MemoryWatch.MemoryEvent (OccurredAt = [%CurrentDateTime%], UsedPercent = 99);
+commit $Event;
+$Flow = create MemoryWatch.MemoryEventFlow (FlowName = 'Test.Flow', MemoryWatch.MemoryEventFlow_MemoryEvent = $Event);
+$Thread = create MemoryWatch.MemoryEventThread (ThreadName = 'JettyServer-1', MemoryWatch.MemoryEventThread_MemoryEvent = $Event);
+commit $Flow;
+commit $Thread;
+call microflow MemoryWatch.ACT_DeleteAll();
+retrieve $Flows from MemoryWatch.MemoryEventFlow;
+retrieve $Threads from MemoryWatch.MemoryEventThread;
+/
+
+/**
+ * @test the status reports the pool being watched and a non-negative event count
+ * @expect $Status/PoolName != empty
+ * @expect $Status/PoolMaxMB > 0
+ * @expect $Status/EventsRecorded >= 0
+ */
+$Status = call microflow MemoryWatch.DS_Status();
+/
+
+/**
+ * @test a test event is written with flows marked unknown or known, and carries its explanatory note
+ * @expect count($Events) >= 1
+ * @expect count($WithNote) >= 1
+ */
+$Done = call java action MemoryWatch.RecordTestEvent();
+$Waited = call java action CommunityCommons.Delay(delaytime = 1500);
+retrieve $Events from MemoryWatch.MemoryEvent;
+retrieve $WithNote from MemoryWatch.MemoryEvent where Note != empty;
+/

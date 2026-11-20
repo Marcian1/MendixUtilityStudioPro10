@@ -142,6 +142,8 @@ final class RunBuilder {
         run.selects = selects;
         run.updates = updates;
         run.subflows = subflows;
+        run.heapStartMb = state.heapStartMb;
+        run.heapEndMb = state.heapEndMb();
         run.executionId = state.id;
         run.node = node;
         for (int i = 0; i < rows.size(); i++) {

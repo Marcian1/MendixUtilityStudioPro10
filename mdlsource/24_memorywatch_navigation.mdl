@@ -1,0 +1,11 @@
+mdl 1;
+
+-- Adds MemoryWatch to the Responsive menu, after the items the other modules added.
+CREATE OR MODIFY NAVIGATION Responsive
+  HOME PAGE MyFirstModule.Home_Web
+{
+  MENU ITEM 'Home' ( OnClick: SHOW PAGE MyFirstModule.Home_Web )
+  MENU ITEM 'Microflow profiler' ( OnClick: SHOW PAGE FlowScope.Executions )
+  MENU ITEM 'Resource monitor' ( OnClick: SHOW PAGE ResourceMonitor.Dashboard )
+  MENU ITEM 'Memory watch' ( OnClick: SHOW PAGE MemoryWatch.Overview )
+};

@@ -1,0 +1,123 @@
+mdl 1;
+
+-- MemoryWatch: writes down what was going on when the heap stayed high after a garbage collection.
+-- The watching itself is Java (javasource/memorywatch/implementation); this file is the data it saves.
+
+CREATE OR MODIFY MODULE MemoryWatch;
+
+/** One time memory got tight: the old generation was still above the threshold after a garbage collection. */
+CREATE OR MODIFY PERSISTENT ENTITY MemoryWatch.MemoryEvent (
+  OccurredAt: DateTime,
+  /** Old generation in use right after the collection, in MB. */
+  OldGenUsedMB: Long DEFAULT 0,
+  OldGenMaxMB: Long DEFAULT 0,
+  /** OldGenUsedMB as a percentage of OldGenMaxMB. */
+  UsedPercent: Integer DEFAULT 0,
+  /** Whole heap at the moment the note was taken. */
+  HeapUsedMB: Long DEFAULT 0,
+  HeapMaxMB: Long DEFAULT 0,
+  /** False when FlowScope is absent or its capture is off: the running flows are then unknown, not none. */
+  FlowsKnown: Boolean DEFAULT false,
+  RunningFlowCount: Integer DEFAULT 0,
+  Note: String(500)
+)
+INDEX (OccurredAt)
+INDEX (UsedPercent);
+
+/** A microflow that was running when the event happened. */
+CREATE OR MODIFY PERSISTENT ENTITY MemoryWatch.MemoryEventFlow (
+  FlowName: String(500),
+  /** False for a flow that finished in the seconds before the note: a heap notification arrives a moment after the collection, so a short flow that allocated and ended in between is listed too. */
+  StillRunning: Boolean DEFAULT true,
+  /** How long it had been running at that moment, or how long it ran in total if it had just finished. */
+  RunningSeconds: Decimal DEFAULT 0
+)
+INDEX (FlowName);
+
+/** A thread that allocated a lot in the minute before the event. Allocation, not retention. */
+CREATE OR MODIFY PERSISTENT ENTITY MemoryWatch.MemoryEventThread (
+  ThreadName: String(200),
+  /** Request, Scheduled event, Task queue or Other, taken from the thread name. */
+  Kind: String(30),
+  AllocatedMB: Long DEFAULT 0,
+  /** The length of the window the allocation was added up over. */
+  WindowSeconds: Integer DEFAULT 0
+);
+
+CREATE OR MODIFY ASSOCIATION MemoryWatch.MemoryEventFlow_MemoryEvent
+  FROM MemoryWatch.MemoryEventFlow TO MemoryWatch.MemoryEvent
+  TYPE Reference
+  OWNER Default
+  ON DELETE CASCADE;
+
+CREATE OR MODIFY ASSOCIATION MemoryWatch.MemoryEventThread_MemoryEvent
+  FROM MemoryWatch.MemoryEventThread TO MemoryWatch.MemoryEvent
+  TYPE Reference
+  OWNER Default
+  ON DELETE CASCADE;
+
+/** One minute of the memory floor: the lowest old-generation level seen after a collection in that minute. */
+CREATE OR MODIFY PERSISTENT ENTITY MemoryWatch.GcFloorPoint (
+  Timestamp: DateTime,
+  OldGenAfterGcMB: Long DEFAULT 0,
+  OldGenMaxMB: Long DEFAULT 0,
+  UsedPercent: Integer DEFAULT 0
+)
+INDEX (Timestamp);
+
+/** The single settings object. Watching is off until a developer switches it on. */
+CREATE OR MODIFY PERSISTENT ENTITY MemoryWatch.Settings (
+  Enabled: Boolean DEFAULT false,
+  /** An event is written when the old generation is above this share of its maximum after a collection. */
+  ThresholdPercent: Integer DEFAULT 80,
+  /** At most one event per this many seconds, so a long spell of pressure writes one row, not thousands. */
+  MinIntervalSeconds: Integer DEFAULT 60,
+  RetentionDays: Integer DEFAULT 14,
+  /** Read each thread's allocation every 10 seconds, to show which threads were busy before an event. */
+  SampleThreads: Boolean DEFAULT true
+);
+
+/** What the watcher is doing right now. Filled by a Java action, never stored. */
+CREATE OR MODIFY NON-PERSISTENT ENTITY MemoryWatch.WatchStatus (
+  Active: Boolean,
+  PoolName: String(100),
+  PoolMaxMB: Long,
+  ThresholdMB: Long,
+  OldGenUsedMB: Long,
+  EventsRecorded: Long,
+  EventsSkipped: Long,
+  EventsDropped: Long,
+  SamplerOn: Boolean,
+  FlowScopeLinked: Boolean
+);
+
+/**
+ * Flows ranked by how many events they were running in. A flow that shows up again and again is a suspect;
+ * one that ran alone in an event is the strongest evidence.
+ */
+CREATE OR MODIFY VIEW ENTITY MemoryWatch.SuspectFlow (
+  FlowName: String(500),
+  EventsSeen: Integer,
+  LongestRunSeconds: Decimal,
+  LastSeen: DateTime
+) AS (
+  SELECT f.FlowName AS FlowName,
+         COUNT(f.RunningSeconds) AS EventsSeen,
+         MAX(f.RunningSeconds) AS LongestRunSeconds,
+         MAX(e.OccurredAt) AS LastSeen
+  FROM MemoryWatch.MemoryEventFlow AS f
+  JOIN f/MemoryWatch.MemoryEventFlow_MemoryEvent/MemoryWatch.MemoryEvent AS e
+  GROUP BY f.FlowName
+);
+
+CREATE OR MODIFY MODULE ROLE MemoryWatch.Admin DESCRIPTION 'Sees the memory events and configures the watcher';
+
+GRANT CREATE, DELETE, READ *, WRITE * ON ENTITY MemoryWatch.MemoryEvent TO MemoryWatch.Admin;
+GRANT CREATE, DELETE, READ *, WRITE * ON ENTITY MemoryWatch.MemoryEventFlow TO MemoryWatch.Admin;
+GRANT CREATE, DELETE, READ *, WRITE * ON ENTITY MemoryWatch.MemoryEventThread TO MemoryWatch.Admin;
+GRANT CREATE, DELETE, READ *, WRITE * ON ENTITY MemoryWatch.GcFloorPoint TO MemoryWatch.Admin;
+GRANT CREATE, DELETE, READ *, WRITE * ON ENTITY MemoryWatch.Settings TO MemoryWatch.Admin;
+GRANT CREATE, READ *, WRITE * ON ENTITY MemoryWatch.WatchStatus TO MemoryWatch.Admin;
+GRANT READ * ON ENTITY MemoryWatch.SuspectFlow TO MemoryWatch.Admin;
+
+ALTER USER ROLE Administrator ADD MODULE ROLES (MemoryWatch.Admin);

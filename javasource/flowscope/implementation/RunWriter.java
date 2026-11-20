@@ -65,6 +65,9 @@ final class RunWriter {
             execution.setValue(context, "SelectCount", run.selects);
             execution.setValue(context, "UpdateCount", run.updates);
             execution.setValue(context, "SubflowCount", run.subflows);
+            execution.setValue(context, "HeapStartMB", run.heapStartMb);
+            execution.setValue(context, "HeapEndMB", run.heapEndMb);
+            execution.setValue(context, "HeapDeltaMB", run.heapEndMb - run.heapStartMb);
             execution.setValue(context, "ExecutionId", truncate(run.executionId, 100));
             execution.setValue(context, "NodeName", truncate(run.node, 100));
             Core.commit(context, execution);
